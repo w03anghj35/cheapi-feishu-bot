@@ -1,0 +1,340 @@
+{
+  "version": "0.1.0",
+  "exportedOn": "2026-10-29",
+  "source": "floating-log-monitor/key-tool",
+  "scope": "Source only; no credentials, runtime state or business history.",
+  "files": [
+    {
+      "file": "key-tool/admin-history.js",
+      "sha256": "bd92a9f8d5c5f2b8e6630b9d9540deeaf6f06c3858cddcb67e8b058b7339656c",
+      "sourceSha256": "bd92a9f8d5c5f2b8e6630b9d9540deeaf6f06c3858cddcb67e8b058b7339656c",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/admin-preload.js",
+      "sha256": "72fe539e1c17c1ce08eb83c7176fbf60a8730743e177fafaf22a336deaad7a98",
+      "sourceSha256": "72fe539e1c17c1ce08eb83c7176fbf60a8730743e177fafaf22a336deaad7a98",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/admin-registration.js",
+      "sha256": "3d9e5343a63bae88dd67ee5e522263a7f20a3534ba039309bf41fd351bac2e4a",
+      "sourceSha256": "3d9e5343a63bae88dd67ee5e522263a7f20a3534ba039309bf41fd351bac2e4a",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/admin-renderer.js",
+      "sha256": "6ecb1d1448c1f1c855b9c17f0ed55d974c7055c5114e951bf8519e39e65a1c6d",
+      "sourceSha256": "6ecb1d1448c1f1c855b9c17f0ed55d974c7055c5114e951bf8519e39e65a1c6d",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/admin.css",
+      "sha256": "7342b195c7fa381bea9b209bfef165273326e453233eae83a80d6c0ea5578c66",
+      "sourceSha256": "7342b195c7fa381bea9b209bfef165273326e453233eae83a80d6c0ea5578c66",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/admin.html",
+      "sha256": "0363bdfffae8f491861892260a238f08c377898f009d3924bfb84ce0f522413d",
+      "sourceSha256": "f43b30fb3aab0cf0ae4582c531b3a58c5b28f7fca043d2a882a2f2871ed53d8a",
+      "unchanged": false,
+      "change": "Removed prefilled application ID; enter same original app locally after migration."
+    },
+    {
+      "file": "key-tool/auth-session.js",
+      "sha256": "d393929f1d66bc1cc9c8fe80d03a0827aa582a7840afc716f8e34e9b22ac88aa",
+      "sourceSha256": "d393929f1d66bc1cc9c8fe80d03a0827aa582a7840afc716f8e34e9b22ac88aa",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/create-diagnostics.js",
+      "sha256": "86c08fa568fc638c5c6f23e65229192e080ebb1de5335dcb3d37f8b4bd2c11cb",
+      "sourceSha256": "86c08fa568fc638c5c6f23e65229192e080ebb1de5335dcb3d37f8b4bd2c11cb",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/disk-store.js",
+      "sha256": "a149d19518ec5c771112aeacfa5745e03d33e80aae4d87a8542efcb43ddf522b",
+      "sourceSha256": "a149d19518ec5c771112aeacfa5745e03d33e80aae4d87a8542efcb43ddf522b",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu-bot-workflow.js",
+      "sha256": "12a43dffceeb3af0d7c898b7d099e3b708f99c94ae61e038ac4dfe8fa0f9c0f2",
+      "sourceSha256": "12a43dffceeb3af0d7c898b7d099e3b708f99c94ae61e038ac4dfe8fa0f9c0f2",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu-connection-lease.js",
+      "sha256": "f6b16acbfdb6b3e67b430f318fb438134e9cafc9d1708f215b3a83a299868ede",
+      "sourceSha256": "f6b16acbfdb6b3e67b430f318fb438134e9cafc9d1708f215b3a83a299868ede",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu-connection.js",
+      "sha256": "1fa894ce651b2af3eaad6e9cdad334d66b020f0417263ab8505100ee47b9d1d5",
+      "sourceSha256": "1fa894ce651b2af3eaad6e9cdad334d66b020f0417263ab8505100ee47b9d1d5",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu-features.js",
+      "sha256": "1af70313161c0358815523102fc3b8c52f71134ba0eff918d14e27f9f4f62df9",
+      "sourceSha256": "1af70313161c0358815523102fc3b8c52f71134ba0eff918d14e27f9f4f62df9",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu-ipc.js",
+      "sha256": "c3a17677b4a4050b6afe5919e7319f47ba5439d2b3c862f82ee3a7db374cfe98",
+      "sourceSha256": "c3a17677b4a4050b6afe5919e7319f47ba5439d2b3c862f82ee3a7db374cfe98",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu-main.js",
+      "sha256": "828821f47d54f1b02f6a7a7ba52b40ea8137635fd8d92dc61c61155a4931d0ee",
+      "sourceSha256": "828821f47d54f1b02f6a7a7ba52b40ea8137635fd8d92dc61c61155a4931d0ee",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu-policy-store.js",
+      "sha256": "af9cea4ad1a91cb7a844838810433d70d1401a1922af5c6fda23c5645e3c5d23",
+      "sourceSha256": "af9cea4ad1a91cb7a844838810433d70d1401a1922af5c6fda23c5645e3c5d23",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu-preload.js",
+      "sha256": "d417eb60d952e6ec237c0c8e113beeb4c422f0c06f29f8f81cc6c2c723f0b294",
+      "sourceSha256": "d417eb60d952e6ec237c0c8e113beeb4c422f0c06f29f8f81cc6c2c723f0b294",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu-registration-card.js",
+      "sha256": "17c06de2345996bd075db87b34b87109d1a8d8c974152531ccab7e1896608647",
+      "sourceSha256": "17c06de2345996bd075db87b34b87109d1a8d8c974152531ccab7e1896608647",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu-registration-flow.js",
+      "sha256": "88c13cd883a341ebaec108ef86c45c7093c510e909271706f2fc3b8e6876e04a",
+      "sourceSha256": "88c13cd883a341ebaec108ef86c45c7093c510e909271706f2fc3b8e6876e04a",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu-renderer.js",
+      "sha256": "dc0e836e8e2d0f9930246d97dce344027be6292779022efca569cadb5c5ef920",
+      "sourceSha256": "dc0e836e8e2d0f9930246d97dce344027be6292779022efca569cadb5c5ef920",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu-request-cards.js",
+      "sha256": "9264889b7d42d5a32484f3026c8d8e398a40e23e37319f36bdbfc8a0f000b9e3",
+      "sourceSha256": "9264889b7d42d5a32484f3026c8d8e398a40e23e37319f36bdbfc8a0f000b9e3",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu-sdk.js",
+      "sha256": "8e7e7bbbb653ae883dac6f3a2eb957bbe5c109dc1278223d35c43b49be42ebd3",
+      "sourceSha256": "8e7e7bbbb653ae883dac6f3a2eb957bbe5c109dc1278223d35c43b49be42ebd3",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu-store.js",
+      "sha256": "d1fde09e5708bc14dac4f15cb540744901cf1dca9a73a92864de4d257c601dfc",
+      "sourceSha256": "d1fde09e5708bc14dac4f15cb540744901cf1dca9a73a92864de4d257c601dfc",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu.css",
+      "sha256": "597b29cb690872d6c436038575b4c23f453fe044392490cb3e705a6501a06b42",
+      "sourceSha256": "597b29cb690872d6c436038575b4c23f453fe044392490cb3e705a6501a06b42",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/feishu.html",
+      "sha256": "e71a2e9090904be99946790f9784a07528f6d5e0ae5a8aafe6a2b82b90b1f660",
+      "sourceSha256": "5bed2b5072896a81930d1605eb698d140f2bf467d0a4d6f4ecff9b96adc16a3b",
+      "unchanged": false,
+      "change": "Removed prefilled application ID; enter same original app locally after migration."
+    },
+    {
+      "file": "key-tool/group-catalog.js",
+      "sha256": "dd2244d2eacac672e6f9c40f63e7bdbb94654a4bee584624cd12b72321609bb9",
+      "sourceSha256": "dd2244d2eacac672e6f9c40f63e7bdbb94654a4bee584624cd12b72321609bb9",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/index.html",
+      "sha256": "76853878a944a2b7bced716c910f9dcdbb9f1c19c764bb1f44fc47eb416fc29a",
+      "sourceSha256": "76853878a944a2b7bced716c910f9dcdbb9f1c19c764bb1f44fc47eb416fc29a",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/main.js",
+      "sha256": "96afccc7f4a6cf72e4a7d83ecca2ccc0f9244681fc29c4d60b0132d1af20fde5",
+      "sourceSha256": "96afccc7f4a6cf72e4a7d83ecca2ccc0f9244681fc29c4d60b0132d1af20fde5",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/operation-history.js",
+      "sha256": "db05a0d8a89b4bbbf2d60f0bce9bb5165a20a17aeafdad416be46079b395537c",
+      "sourceSha256": "db05a0d8a89b4bbbf2d60f0bce9bb5165a20a17aeafdad416be46079b395537c",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/package-lock.json",
+      "sha256": "6b59006f7af62f82ce96dc94a952a6f85387a00b5f56747f2c15d911c036595f",
+      "sourceSha256": "6b59006f7af62f82ce96dc94a952a6f85387a00b5f56747f2c15d911c036595f",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/package.json",
+      "sha256": "6cd694af0f0a996527de88e73cb19b6916f8bca172fccdbdfc67177585bb57db",
+      "sourceSha256": "6cd694af0f0a996527de88e73cb19b6916f8bca172fccdbdfc67177585bb57db",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/preload.js",
+      "sha256": "4e6dd11089fabaccf03f64e04c133749c83eb5be42d68c31dad1aedf04083fd5",
+      "sourceSha256": "4e6dd11089fabaccf03f64e04c133749c83eb5be42d68c31dad1aedf04083fd5",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/renderer.js",
+      "sha256": "6acc7fdc39947f4c8d93a6b492bb0eb4b912fe73230c85c7bcc22353227bcad4",
+      "sourceSha256": "6acc7fdc39947f4c8d93a6b492bb0eb4b912fe73230c85c7bcc22353227bcad4",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/service.js",
+      "sha256": "982d81e10d1bd9c65ae5d5a9de8b1573206acf653ce2b33d9e1eab0998865575",
+      "sourceSha256": "982d81e10d1bd9c65ae5d5a9de8b1573206acf653ce2b33d9e1eab0998865575",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/session-store.js",
+      "sha256": "c4a351547dbd83541cff1ee7ec88f0a4b5038766ae7a95cdd062635023dc64ba",
+      "sourceSha256": "c4a351547dbd83541cff1ee7ec88f0a4b5038766ae7a95cdd062635023dc64ba",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/style.css",
+      "sha256": "28030fb92f7dec4826c7bc3d05a640141ffd868444669ce846c3bd1591079029",
+      "sourceSha256": "28030fb92f7dec4826c7bc3d05a640141ffd868444669ce846c3bd1591079029",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-auth-session.js",
+      "sha256": "395f1ac81e8f66d3a9c9587b71971a93ca9265622498e4bc639150fafc7d21b7",
+      "sourceSha256": "395f1ac81e8f66d3a9c9587b71971a93ca9265622498e4bc639150fafc7d21b7",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-create-diagnostics.js",
+      "sha256": "81e54d62f9f1ac5915c4c3a052bd44787573ace7ace7a28f26fec5ca308ab732",
+      "sourceSha256": "81e54d62f9f1ac5915c4c3a052bd44787573ace7ace7a28f26fec5ca308ab732",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-disk-store.js",
+      "sha256": "ed551f490f81f1375af5e1f2157ac483eeeec35fbd7af0f70efbc7c152284289",
+      "sourceSha256": "ed551f490f81f1375af5e1f2157ac483eeeec35fbd7af0f70efbc7c152284289",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-feishu-bot-workflow.js",
+      "sha256": "ea05a7a540c6a5e187a99da2fcee624c4ac1bbd84b0c981a1a2d64d219cf5efe",
+      "sourceSha256": "ea05a7a540c6a5e187a99da2fcee624c4ac1bbd84b0c981a1a2d64d219cf5efe",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-feishu-connection.js",
+      "sha256": "2ae64816552f3f4d87b2e74e2cd49fd99de03e9486587c8cef0221299296d09b",
+      "sourceSha256": "2ae64816552f3f4d87b2e74e2cd49fd99de03e9486587c8cef0221299296d09b",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-feishu-context-electron.cjs",
+      "sha256": "7cfe6aaded68d88dfdb69d6634dc4c417c9166dcb5acb82fcb8a3e17edf83430",
+      "sourceSha256": "7cfe6aaded68d88dfdb69d6634dc4c417c9166dcb5acb82fcb8a3e17edf83430",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-feishu-electron.cjs",
+      "sha256": "6c28527ecef48f633e0bb3c4d63321d35e5b3b20d86dcf988d6ddedb669e294c",
+      "sourceSha256": "6c28527ecef48f633e0bb3c4d63321d35e5b3b20d86dcf988d6ddedb669e294c",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-feishu-policy-store.js",
+      "sha256": "5f38740233448bb0dda9fbd8900c3e82f72714e7ff52a058b9bc0834fd6a8d02",
+      "sourceSha256": "5f38740233448bb0dda9fbd8900c3e82f72714e7ff52a058b9bc0834fd6a8d02",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-feishu-quick-request.js",
+      "sha256": "0de62d1bcb8cde6effb432f52fb00b984087445f87824d982dbb619717b1986b",
+      "sourceSha256": "0de62d1bcb8cde6effb432f52fb00b984087445f87824d982dbb619717b1986b",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-feishu-registration.js",
+      "sha256": "bd7d0a641247a6a6e26458ab8d4e6a1e2bbc0bdd6baff91d42682f8288eb9c8a",
+      "sourceSha256": "bd7d0a641247a6a6e26458ab8d4e6a1e2bbc0bdd6baff91d42682f8288eb9c8a",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-feishu-sdk.js",
+      "sha256": "f72377a7c4a61929be6fefe544069cbab0e35da617efc0476e13e2347e249b66",
+      "sourceSha256": "f72377a7c4a61929be6fefe544069cbab0e35da617efc0476e13e2347e249b66",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-feishu-store.js",
+      "sha256": "dd31618f0a57259893c8c0542d57a50d486a01d0e1efd1259ace20c47733ad8d",
+      "sourceSha256": "dd31618f0a57259893c8c0542d57a50d486a01d0e1efd1259ace20c47733ad8d",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-fixture.js",
+      "sha256": "1b84072e6d560a096b010039f26a75334f978c73e8a6dda4be28973c1556c286",
+      "sourceSha256": "1b84072e6d560a096b010039f26a75334f978c73e8a6dda4be28973c1556c286",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-group-catalog.js",
+      "sha256": "431920a6b30212fde3d9c2b24384943854391850d59e64f3a8c48a830869a768",
+      "sourceSha256": "431920a6b30212fde3d9c2b24384943854391850d59e64f3a8c48a830869a768",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-operation-history.js",
+      "sha256": "7eb632b5d58b297233838ab4be13b858931611402ae22c7fcf967e8d866baf05",
+      "sourceSha256": "7eb632b5d58b297233838ab4be13b858931611402ae22c7fcf967e8d866baf05",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-service.js",
+      "sha256": "5867ed2b567a40141c37cae68437d36376d2ed2410266a4b4f13195a42b2d480",
+      "sourceSha256": "5867ed2b567a40141c37cae68437d36376d2ed2410266a4b4f13195a42b2d480",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-storage-electron.cjs",
+      "sha256": "afe8a55869f7c6210e262e713c7170eaf821b68e58a58ebc02c775a959e20472",
+      "sourceSha256": "afe8a55869f7c6210e262e713c7170eaf821b68e58a58ebc02c775a959e20472",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/test-user-registration.js",
+      "sha256": "247f99f2a91b386e680ed273a0b92fd74fd7ed1db2a2e515fb423b6024eceb17",
+      "sourceSha256": "247f99f2a91b386e680ed273a0b92fd74fd7ed1db2a2e515fb423b6024eceb17",
+      "unchanged": true
+    },
+    {
+      "file": "key-tool/user-registration-service.js",
+      "sha256": "979dc3b17cb19d4ff36f40873be9366f23cc1db1f8bf8188c604353eb5e2e77f",
+      "sourceSha256": "979dc3b17cb19d4ff36f40873be9366f23cc1db1f8bf8188c604353eb5e2e77f",
+      "unchanged": true
+    }
+  ]
+}

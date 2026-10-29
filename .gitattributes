@@ -1,0 +1,4 @@
+* text=auto eol=lf
+# Preserve exported source bytes so SOURCE-MANIFEST.json is reproducible.
+key-tool/* -text
+*.bat text eol=crlf

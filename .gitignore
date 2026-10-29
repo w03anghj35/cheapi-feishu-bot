@@ -1,0 +1,29 @@
+node_modules/
+**/node_modules/
+.runtime/
+outputs/
+dist/
+coverage/
+*.log
+*.tmp
+*.journal
+*.lock
+*.db
+*.sqlite*
+*.zip
+*.7z
+*.exe
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+.npmrc
+config.json
+**/Local State
+**/Cookies*
+**/Login Data*
+**/Sessions/
+**/Partitions/
+CheapiKeyStudio*/
+

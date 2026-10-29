@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>飞书连接管理 · 令牌助手</title>
+  <link rel="stylesheet" href="style.css"><link rel="stylesheet" href="feishu.css">
+  <script src="feishu-renderer.js" defer></script>
+</head>
+<body>
+  <header><div class="brand">令牌助手 <span>FEISHU / LOCAL</span></div><span class="badge">管理员专用 · 连接诊断</span></header>
+  <main>
+    <section class="intro"><div><p class="eyebrow">先连接，再开放服务</p><h1>把本机工具<br>连接到飞书。</h1><p class="subtitle">不需要公网服务器。应用密钥留在这台电脑，<br>客户不需要登录令牌平台。</p></div>
+      <aside class="session"><h2>当前不会创建令牌</h2><p>此阶段只检查长连接和接收次数，不保存消息正文，不主动发消息，不读取令牌平台授权。</p><p>连接成功不代表应用已发布，也不代表群内业务已接通。</p></aside>
+    </section>
+    <p id="notice" role="status" aria-live="polite">正在读取本机配置状态……</p>
+    <div class="connection-workspace">
+      <section aria-labelledby="config-title"><div class="section-title"><h2 id="config-title"><small>01</small>应用配置</h2><span id="saved" class="muted">未保存</span></div>
+        <form id="config-form">
+          <label for="app-id">App ID</label><input id="app-id" name="appId" value="" maxlength="20" required spellcheck="false" autocomplete="off" aria-describedby="app-id-hint">
+          <p id="app-id-hint" class="hint">飞书开发者后台 → 凭证与基础信息。请确认属于“令牌助手”。</p>
+          <label for="app-secret">App Secret <em>仅在本机输入</em></label><input id="app-secret" name="appSecret" type="password" maxlength="512" required autocomplete="new-password" spellcheck="false" placeholder="粘贴应用密钥，保存后立即清空" aria-describedby="secret-hint">
+          <p id="secret-hint" class="hint">用 Windows 系统加密保存；不会回显、发到聊天或写入源码。跨电脑需重新配置。修改配置前请先断开。</p>
+          <button id="save" class="primary" type="submit">加密保存配置 <span aria-hidden="true">→</span></button>
+        </form>
+      </section>
+      <section class="connection-panel" aria-labelledby="connection-title"><h2 id="connection-title"><small>02</small>连接与验证</h2>
+        <div id="connection-status" data-phase="loading" role="status" aria-live="polite">读取中</div>
+        <p id="status-hint" class="muted">保存后手动连接；重开窗口不会自动连接。</p>
+        <div class="actions"><button id="connect" class="dark" disabled>连接飞书</button><button id="disconnect" disabled>断开连接</button></div>
+        <dl class="metrics"><div><dt>消息接收次数</dt><dd id="message-count">0</dd></div><div><dt>卡片回调次数</dt><dd id="callback-count">0</dd></div></dl>
+        <p class="hint">只统计本轮连接的投递次数（含重投），不代表独立用户数或已处理业务数。</p>
+        <dl class="connection-details"><dt>最近连接成功</dt><dd id="connected-at">尚未连接</dd><dt>最近收到事件</dt><dd id="last-event">尚未收到</dd><dt>本轮重连尝试</dt><dd id="retries">0</dd><dt>脱敏诊断计数</dt><dd id="diagnostics">0</dd></dl>
+      </section>
+    </div>
+    <section class="next-step"><h2><small>03</small>下一步验证顺序</h2><ol><li>本机连接状态显示“已连接”。</li><li>确认发布范围后发布应用，再将机器人加入指定群。</li><li>验证群内 @、私聊和卡片回调；最后接入分组、额度与可信身份审计。</li></ol><p class="muted">本窗口不执行发布。长连接中断会限时重试，45 秒仍未恢复则停止，等待手动检查。关闭窗口会断开连接。</p></section>
+    <footer><span>仅供本机管理员使用 · 请勿分发含配置的用户目录</span><span>连接诊断 v0.1 · 业务创建尚未启用</span></footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Cheapi 令牌工作台</title><link rel="stylesheet" href="style.css"></head>
+<body><header><a class="brand" href="#main">C<span> / KEY STUDIO</span></a><span class="badge">本机专属工作台</span></header>
+<main id="main"><section class="intro"><div><p class="eyebrow">CHEAPI · ACCESS MANAGEMENT</p><h1>把访问权限，<br>交到对的人手中。</h1><p class="subtitle">选择分组，明确额度。每一次创建都由您确认。</p></div>
+<aside class="session"><span class="dot"></span><strong id="connection">正在连接令牌服务…</strong><p>服务由管理员配置，您无需登录平台。选择可用分组并设置额度即可创建。</p><div class="actions"><button id="refresh" class="dark">刷新可用分组</button></div></aside></section>
+<p id="notice" role="status" aria-live="polite">正在自动读取可用分组…</p>
+<div class="workspace"><section class="groups"><div class="section-title"><h2><small>01</small> 选择可用分组</h2><span id="count">—</span></div><p class="muted">仅显示管理员已命名并发布的分组，不默认替您选择。</p><div id="groups" role="group" aria-label="可用分组"><p class="empty">正在加载可用分组…</p></div></section>
+<section class="creation"><h2><small>02</small> 设置令牌</h2><form id="form"><label for="operator">操作人／客户账号 <em>必填</em></label><input id="operator" maxlength="100" placeholder="填写客户账号、姓名或联系标识" autocomplete="off" required><p class="hint">此信息会记录给管理员；由操作人手动填写，尚未接入身份核验。</p><label for="name">令牌名称</label><input id="name" maxlength="60" value="飞书令牌" required><label for="selected">所选分组</label><input id="selected" value="请先点击左侧分组" readonly>
+<label for="quota">额度 <em>必填 · 必须大于 0</em></label><input id="quota" type="number" step="any" min="0.00000001" placeholder="例如 5 或 10.5" required><p class="hint">直接使用平台额度单位；不是充值兑换码，不进行倍数换算。实际消费仍受账户余额及平台规则约束。</p>
+<label for="days">有效天数 <span class="muted">可选</span></label><input id="days" type="number" min="1" max="3650" step="1" placeholder="留空按平台默认有效期"><button id="create" class="primary" type="submit" disabled>创建令牌 <span>↗</span></button><p class="hint">仅创建 1 枚。发生超时不会自动重试。</p></form></section></div>
+<section id="pending" hidden><h2>有创建结果需要核对</h2><div id="pending-list"></div></section>
+<section id="result" hidden><div class="section-title"><h2><small>03</small> 令牌已就绪</h2><button id="hide-key">隐藏密钥</button></div><p id="result-meta"></p><label for="secret">令牌密钥 · 仅交给预期接收者</label><div class="key-row"><input id="secret" type="password" readonly autocomplete="off"><button id="reveal">显示</button><button id="copy" class="dark">复制密钥</button></div><p class="hint">成功回执加密保存在本机；不上传飞书。复制后 60 秒自动清除本工具写入的剪贴板内容。</p><button id="another">准备创建下一枚</button></section>
+<footer>max.cheapi.cc <span>本机创建工具 / 飞书适配接口已预留，尚未启用</span></footer></main><script src="renderer.js"></script></body></html>

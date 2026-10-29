@@ -1,0 +1,24 @@
+{
+  "name": "cheapi-feishu-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "飞书群令牌创建与用户注册机器人（Windows 本机管理端）",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "runtime:install": "node scripts/ensure-electron.cjs",
+    "deps:bot": "npm ci --prefix key-tool --no-audit --no-fund",
+    "start": "node scripts/run-electron.cjs --admin-groups",
+    "customer": "node scripts/run-electron.cjs",
+    "diagnose": "node scripts/run-electron.cjs --diagnostic",
+    "test": "node scripts/run-tests.cjs",
+    "test:ui": "node scripts/run-electron.cjs --fixture-test",
+    "check": "node scripts/check-source.cjs",
+    "check:release": "node scripts/check-release.cjs"
+  },
+  "devDependencies": {
+    "electron": "42.4.0"
+  }
+}
