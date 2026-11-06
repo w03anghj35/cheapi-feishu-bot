@@ -4,6 +4,7 @@
   "private": true,
   "main": "main.js",
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "1.76.0"
+    "@larksuiteoapi/node-sdk": "1.76.0",
+    "nodemailer": "7.0.13"
   }
 }

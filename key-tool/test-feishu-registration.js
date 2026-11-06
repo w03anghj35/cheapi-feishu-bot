@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { FeishuBotWorkflow } = require('./feishu-bot-workflow');
 const { UserRegistrationService } = require('./user-registration-service');
 const { makeFixture } = require('./test-fixture');
-const { KeyService } = require('./service');
+const { KeyService, ToolError } = require('./service');
 const USER = 'ou_member_12345678', GROUP = 'oc_group_12345678', DM = 'oc_private_12345678';
 const PASSWORD = '  Fictional  Password  ';
 const FORM_VALUES = { email: 'fictional@example.invalid', password: PASSWORD, username: '测试用户名', concurrency: '50', balance: '0' };
@@ -67,7 +67,7 @@ test('pure mention opens two-feature private menu; no fake third button, no grou
   const card = f.cards[0]; assert.equal(card.receiveIdType, 'open_id'); assert.equal(card.receiveId, USER);
   assert.equal(card.card.config.enable_forward, false);
   const buttons = card.card.elements.flatMap(x => x.actions || []).filter(x => x.value.action === 'feature');
-  assert.deepEqual(buttons.map(x => x.value.featureId), ['register', 'token']);
+  assert.deepEqual(buttons.map(x => x.value.featureId), ['register', 'token', 'user-query']);
   assert.equal(f.posts.length, 0); assert.equal(f.workflow.codes.size, 0);
 });
 for (const balance of ['0','1','5','10']) test(`private registration balance ${balance}: exact password, one explicit POST, no password echo`, async () => {
@@ -302,4 +302,21 @@ test('failure while displaying confirmation still scrubs the queue-owned passwor
   f.workflow.handleCard(f.form()); await f.workflow.tail;
   assert.equal(queueData.password, undefined); assert.equal(f.posts.length, 0);
   assert.equal(JSON.stringify(f.texts).includes(PASSWORD), false); f.workflow.reset();
+});
+
+test('definitive duplicate email reaches only the initiator as a safe, readable reason', async () => {
+  const f = await setup(); await f.fill(); let attempts = 0;
+  const original = f.registration.request;
+  f.registration.request = async (method, route, body) => {
+    if (method !== 'POST') return original(method, route, body);
+    attempts++; const error = new ToolError('HTTP', `邮箱已存在，password=${PASSWORD}`);
+    Object.assign(error, { definitive: true, reason: 'EMAIL_EXISTS', httpStatus: 409 }); throw error;
+  };
+  assert.equal((await f.dm('确认')).status, 'registration-failed');
+  const replies = f.texts.filter(row => row.text.includes('邮箱已经注册'));
+  assert.equal(replies.length, 1); assert.equal(replies[0].receiveIdType, 'open_id'); assert.equal(replies[0].receiveId, USER);
+  assert.equal(attempts, 1); assert.equal(f.registration.records[0].state, 'failed');
+  assert.equal(f.registration.records[0].errorReason, 'EMAIL_EXISTS');
+  assert.equal(JSON.stringify(f.texts).includes(PASSWORD), false);
+  assert.equal(JSON.stringify(f.registration.records).includes(PASSWORD), false);
 });

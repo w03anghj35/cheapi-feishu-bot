@@ -1,6 +1,7 @@
 'use strict';
 const { ToolError } = require('./service');
 const { verifiedFeishuOperator } = require('./operation-history');
+const { knownReason } = require('./platform-error');
 const BALANCES = Object.freeze([0, 1, 5, 10]);
 const CODES = ['INPUT','AUTH','DENIED','POLICY','BUSY','STORAGE','DUPLICATE','UNKNOWN','HTTP','API','NETWORK','SCHEMA','OPERATION_ERROR'];
 const fail = (code, message) => { throw new ToolError(code, message); };
@@ -44,7 +45,7 @@ function assertRegistrationBody(body) {
   return checked;
 }
 function validateRecords(rows) {
-  const keys = ['kind','requestId','owner','state','body','operator','feishuGroupId','at','updatedAt','receipt','errorCode','reviewedAt','reviewedBy'];
+  const keys = ['kind','requestId','owner','state','body','operator','feishuGroupId','at','updatedAt','receipt','errorCode','errorReason','reviewedAt','reviewedBy'];
   const ids = new Set(), timestamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
   try {
     if (!Array.isArray(rows)) throw new Error();
@@ -60,6 +61,7 @@ function validateRecords(rows) {
       const actor = verifiedFeishuOperator(row.operator);
       if (Object.keys(row.operator).length !== Object.keys(actor).length) throw new Error();
       if (row.errorCode !== undefined && !CODES.includes(row.errorCode)) throw new Error();
+      if (row.errorReason !== undefined && !knownReason(row.errorReason)) throw new Error();
       if (row.receipt !== undefined) {
         const r = row.receipt;
         if (!r || Object.keys(r).length !== 6 || !Number.isSafeInteger(r.id) || r.id <= 0 ||
@@ -92,10 +94,12 @@ class UserRegistrationService {
     const sorted = [...this.records].reverse(), pages = Math.max(1, Math.ceil(sorted.length / 20));
     page = Math.min(page, pages);
     return { page, pages, total: sorted.length, blocked: this.blocked().length, storageError: this.storageFault,
-      items: sorted.slice((page - 1) * 20, page * 20).map(row => ({ requestId: row.requestId, state: row.state,
-        owner: row.owner, at: row.at, updatedAt: row.updatedAt || row.at, operator: row.operator?.name || '',
+      items: sorted.slice((page - 1) * 20, page * 20).map(original => {const row=this.decorateRecord?.(original)||original;return ({ requestId: row.requestId, state: row.state,
+        owner: row.owner, at: row.at, updatedAt: row.updatedAt || row.at, operator: row.operator?.displayName || row.operator?.name || '',
+        operatorIdentity:row.operator?.name||'',operatorNameSource:row.operator?.nameSource||null,
         email: row.body.email, username: row.body.username, concurrency: row.body.concurrency, balance: row.body.balance,
-        role: 'user', userId: row.receipt?.id || null, errorCode: row.errorCode || null, reviewedAt: row.reviewedAt || null })) };
+        role: 'user', userId: row.receipt?.id || null, errorCode: row.errorCode || null,
+        errorReason: row.errorReason || null, reviewedAt: row.reviewedAt || null });}) };
   }
   review(id, confirmed, owner) {
     if (this.busy || this.storageFault) fail('STORAGE', '注册账本忙碌或异常，不能解除保护。');
@@ -135,10 +139,17 @@ class UserRegistrationService {
       this.patch(input.requestId, { state: 'success', receipt });
       return receipt;
     } catch (error) {
-      const code = CODES.includes(error?.code) ? error.code : 'OPERATION_ERROR';
-      if (pending && !this.storageFault) this.patch(input.requestId, { state: !attempted || error?.definitive === true ? 'failed' : 'unknown', errorCode: code });
-      // Never propagate third-party messages/bodies; they may echo the submitted password.
-      throw new ToolError(code, pending ? '请联系管理员按操作编号核对注册记录；不会自动重复创建。' : '注册未提交，请联系管理员检查参数、授权或存储。');
+      const definitive = !attempted || error?.definitive === true;
+      const code = this.storageFault ? 'STORAGE' : attempted && !definitive ? 'UNKNOWN' : CODES.includes(error?.code) ? error.code : 'OPERATION_ERROR';
+      const reason = definitive ? knownReason(error?.reason) : null;
+      if (pending && !this.storageFault) this.patch(input.requestId, { state: definitive ? 'failed' : 'unknown', errorCode: code,
+        ...(reason ? { errorReason: reason } : {}) });
+      // Only a fixed reason enum crosses the boundary; raw platform text can echo a password.
+      const safe = new ToolError(code, attempted && !definitive
+        ? '注册结果未确认，请管理员按操作编号核对；不要重复提交。'
+        : pending ? '平台明确拒绝或本机校验未通过，请按操作编号核对。' : '注册未提交，请检查参数、授权或存储。');
+      Object.assign(safe, { reason, definitive, attempted, httpStatus: Number.isInteger(error?.httpStatus) ? error.httpStatus : null });
+      throw safe;
     } finally { delete body.password; this.busy = false; }
   }
 }

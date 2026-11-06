@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { FeishuBotWorkflow } = require('./feishu-bot-workflow');
 const { requestCard } = require('./feishu-request-cards');
 const { makeFixture } = require('./test-fixture');
-const { KeyService } = require('./service');
+const { KeyService, ToolError } = require('./service');
 const USER = 'ou_member_12345678', GROUP = 'oc_group_12345678', DM = 'oc_private_12345678';
 
 async function setup() {
@@ -265,4 +265,20 @@ test('pagination callbacks select from the original server-side group list', asy
   assert.equal(f.workflow.sessions.get(USER).page, 1);
   await f.click('group'); assert.equal(f.workflow.sessions.get(USER).selectedGroup.id, 11);
   assert.equal(f.posts(), 0);
+});
+
+test('definitive platform group rejection is explained privately without raw response or retry', async () => {
+  const f = await setup(); await f.start(); await f.click('group'); await f.click('quota');
+  const original = f.service.request; let attempts = 0;
+  f.service.request = async (method, route, ...rest) => {
+    if (method !== 'POST') return original(method, route, ...rest);
+    attempts++; const error = new ToolError('HTTP', '分组已停用 sk-fictional-secret');
+    Object.assign(error, { definitive: true, reason: 'GROUP_UNAVAILABLE', httpStatus: 422 }); throw error;
+  };
+  await f.click('confirm');
+  assert.equal(f.service.records[0].state, 'failed'); assert.equal(attempts, 1);
+  const result = f.texts.find(row => row.text.includes('所选分组在平台上不可用'));
+  assert.equal(result.receiveIdType, 'open_id'); assert.equal(result.receiveId, USER);
+  assert.equal(JSON.stringify(f.texts).includes('sk-fictional-secret'), false);
+  await f.dm('确认'); assert.equal(attempts, 1);
 });

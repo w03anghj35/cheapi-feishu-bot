@@ -1,5 +1,6 @@
 'use strict';
-const { FEATURES } = require('./feishu-features');
+const { availableFeatures } = require('./feishu-features');
+const groupSettings = require('./feishu-group-settings');
 const { registrationPrompt } = require('./feishu-registration-flow');
 const { registrationForm } = require('./feishu-registration-card');
 
@@ -17,8 +18,10 @@ function requestCard(session, maxQuota) {
   if (session.state === 'menu') {
     title = '请选择功能';
     elements = [div('请选择要办理的业务，也可回复功能编号或名称。账号资料和令牌都不发到群里。'),
-      ...FEATURES.map((feature, i) => row([button(`${i + 1}. ${feature.label}`, 'feature', { featureId: feature.id })])),
+      ...availableFeatures(session.isAdmin).map((feature, i) => row([button(`${i + 1}. ${feature.label}`, 'feature', { featureId: feature.id })])),
       row([button('取消', 'cancel')])];
+  } else if (session.state.startsWith('settings-')) {
+    title = '分组设置 · 仅管理员'; elements = groupSettings.elements(session, button);
   } else if (session.state === 'register-form') {
     title = '用户注册 · 填写资料';
     elements = [div('在下方卡片内填写，不用逐条发送消息。仅创建普通用户，10分钟内完成。\n密码会遮挡显示；资料仍经飞书处理，请使用全新专用密码。本工具不回显、不记录密码。'),

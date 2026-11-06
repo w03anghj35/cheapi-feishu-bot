@@ -6,6 +6,7 @@
 | --- | --- | --- | --- |
 | Electron | 42.4.0 | Windows 桌面运行环境 | MIT；[electron/electron](https://github.com/electron/electron)，其 Chromium/Node 等组件有各自通知 |
 | @larksuiteoapi/node-sdk | 1.76.0 | 飞书长连接/API适配 | MIT；[larksuite/node-sdk](https://github.com/larksuite/node-sdk) |
+| Nodemailer | 7.0.13 | 可选 QQ SMTP 低余额提醒 | MIT-0；[nodemailer/nodemailer](https://github.com/nodemailer/nodemailer) |
 
 锁定的传递依赖以两份 package-lock.json 为准，许可证以实际安装包内容为准。没有复制飞书/平台网页、视频、图标或开源项目页面作为产品素材。业务应用源码为 `UNLICENSED`，不因依赖采用MIT就自动授予本项目MIT许可。
 

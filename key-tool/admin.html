@@ -1,30 +1,43 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
-<title>管理员 · 客户分组设置</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="admin.css"></head>
-<body><header><a class="brand" href="#main">C<span> / GROUP CURATION</span></a><span class="badge">管理员设置</span></header>
-<main id="main"><p class="eyebrow">ORIGINAL → CUSTOMER</p><h1>平台的分组，<br>用您的名字交付。</h1><p class="subtitle">左侧是平台原始信息，右侧是客户看到的名称。<strong>留空不发布</strong>，填写后点击保存生效；不修改平台原名。</p>
-<section class="auth-card" aria-labelledby="auth-title"><div><p class="eyebrow">LOCAL / ENCRYPTED</p><h2 id="auth-title">管理员授权</h2><p id="auth-status" role="status" aria-live="polite">正在检查本机授权…</p><p id="auth-meta" class="muted"></p></div>
+<title>管理员 · 管理后台</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="admin.css"></head>
+<body class="admin-shell"><header class="admin-topbar"><a class="brand" href="#main">C<span> / ADMIN CONSOLE</span></a><span class="badge">本机管理后台</span></header>
+<aside class="admin-sidebar"><p class="eyebrow">工作空间</p><nav aria-label="管理功能">
+<button type="button" data-admin-target="configuration" aria-current="page"><span>01</span>管理配置</button>
+<button type="button" data-admin-target="token-groups"><span>02</span>令牌分组</button>
+<button type="button" data-admin-target="group-settings"><span>03</span>分组设置</button>
+<button type="button" data-admin-target="token-history"><span>04</span>令牌记录</button>
+<button type="button" data-admin-target="registration-history"><span>05</span>注册记录</button>
+<button type="button" data-admin-target="operation-log"><span>06</span>操作日志</button>
+<button type="button" data-admin-target="channel-monitor"><span>07</span>渠道监控</button>
+<button type="button" data-admin-target="user-ownership"><span>08</span>用户归属</button>
+<button type="button" data-admin-target="account-management"><span>09</span>账号管理</button>
+<button type="button" data-admin-target="usage-history"><span>10</span>用量统计</button>
+</nav><p class="sidebar-note">配置按功能独立管理<br>切换栏目保留表单草稿</p></aside>
+<main id="main"><p class="eyebrow">CHEAPI / 管理工作台</p><h1 id="admin-view-title" tabindex="-1">管理配置</h1><p id="admin-view-description" class="subtitle">管理平台授权、飞书连接、管理员与目标群绑定。</p>
+<section class="auth-card" data-admin-view="configuration" aria-labelledby="auth-title"><div><p class="eyebrow">LOCAL / ENCRYPTED</p><h2 id="auth-title">管理员授权</h2><p id="auth-status" role="status" aria-live="polite">正在检查本机授权…</p><p id="auth-meta" class="muted"></p></div>
 <div class="auth-actions"><button id="admin-recover" type="button" hidden>保留原件并恢复授权</button><button id="admin-login" type="button">登录／重新授权</button><button id="admin-complete-login" type="button" class="dark" disabled>完成登录并保存</button></div>
 <p class="auth-hint hint">仅管理员操作：在平台窗口完成登录后返回此处保存。授权由 Windows 加密保存在本机，重开会核验恢复；平台使授权失效后需重新登录。客户界面不会出现登录入口。</p></section>
-<div class="admin-toolbar"><button id="admin-refresh">重新读取平台分组</button><span id="admin-account" class="muted">正在读取…</span></div>
+<section data-admin-view="token-groups" aria-label="令牌分组配置" hidden><div class="admin-toolbar"><button id="admin-refresh">重新读取平台分组</button><span id="admin-account" class="muted">正在读取…</span></div>
 <p id="admin-notice" role="status" aria-live="polite">正在读取平台分组…</p>
 <form id="catalog-form"><div class="catalog-heading"><h2>原始分组 / 仅管理员可见</h2><h2>客户显示名称</h2></div><div id="catalog-rows"></div>
-<div class="save-bar"><div><strong id="publish-count">0 个待发布</strong><p class="hint">空白名称自动隐藏。保存后，当前客户工作台立即更新。</p></div><button id="admin-save" class="dark" type="submit" disabled>保存并更新客户分组 ↗</button></div></form>
-<section id="feishu-bot" class="bot-policy" aria-labelledby="bot-title"><div class="section-title"><div><p class="eyebrow">ONE GROUP / ALL MEMBERS</p><h2 id="bot-title">飞书群令牌助手</h2></div><button id="bot-refresh" type="button">刷新状态</button></div>
+<div class="save-bar"><div><strong id="publish-count">0 个待发布</strong><p class="hint">空白名称自动隐藏。保存后，当前客户工作台立即更新。</p></div><button id="admin-save" class="dark" type="submit" disabled>保存并更新客户分组 ↗</button></div></form></section>
+<section id="feishu-bot" class="bot-policy" data-admin-view="configuration" aria-labelledby="bot-title"><div class="section-title"><div><p class="eyebrow">ONE GROUP / ALL MEMBERS</p><h2 id="bot-title">飞书连接与群策略</h2></div><button id="bot-refresh" type="button">刷新状态</button></div>
 <p class="muted">只接入管理员绑定的一个 2API 群，不设置少数成员白名单：该群内任何可向机器人发消息的用户都能发起申请；令牌只私聊发给发起者。机器人只有在本机令牌工具保持运行且飞书长连接在线时可用。配置默认关闭；绑定与额度未齐全前不会处理申请。飞书后台仍须允许目标群及预期成员使用应用，代码无法扩大平台可见范围。</p>
 <div class="bot-status-grid"><div><strong>本机连接</strong><span id="bot-connection">正在检查…</span></div><div><strong>管理员身份</strong><span id="bot-owner">未绑定</span></div><div><strong>目标群</strong><span id="bot-group">未绑定</span></div><div><strong>2API 账户绑定</strong><span id="bot-account-binding">未绑定</span></div><div><strong>群内申请</strong><span id="bot-enabled">已关闭</span></div></div>
+<p id="bot-reconnect-status" class="hint" role="status" aria-live="polite">自动连接状态正在检查…</p>
 <details><summary>最近创建失败诊断（仅管理员）</summary><p id="bot-failure-notice" class="hint" role="status"></p><p class="hint">只记录错误编号、操作编号、失败阶段和 HTTP 状态，不保存密钥、身份或接口原文；不是创建记录，不解除待核对保护。旧版失败没有追溯数据。</p><ol id="bot-failures"></ol></details>
 <form id="bot-credentials-form" class="bot-limits"><label>飞书 App ID<input id="bot-app-id" type="text" value="" maxlength="20" autocomplete="off" required></label><label>App Secret（仅本机输入）<input id="bot-app-secret" type="password" maxlength="512" autocomplete="new-password" required></label><button id="bot-credentials-save" type="submit" class="dark">加密保存飞书配置</button><p class="hint">与独立诊断工具的加密环境分离，旧文件保留、不自动搬运密钥。请您亲自输入；保存会关闭群策略并清除旧绑定，需要重新确认管理员和目标群。</p></form>
 <div class="bot-actions"><button id="bot-connect" type="button" class="dark">连接飞书</button><button id="bot-disconnect" type="button">断开飞书</button><button id="bot-owner-start" type="button">绑定管理员身份</button><button id="bot-owner-approve" type="button" hidden>确认此管理员</button><button id="bot-group-start" type="button">绑定 2API 目标群</button><button id="bot-group-approve" type="button" hidden>确认绑定此群</button></div>
 <p id="bot-challenge" class="hint" role="status" aria-live="polite"></p><p id="bot-candidate" class="hint" role="status" aria-live="polite"></p>
 <form id="bot-policy-form" class="bot-limits"><label>单次最高额度<input id="bot-max-quota" type="number" min="0.0001" step="0.0001" inputmode="decimal" placeholder="20" required></label><label>每人每日最高额度（留空=无限制）<input id="bot-user-day" type="number" min="0.0001" step="0.0001" inputmode="decimal" placeholder="无限制"></label><label>全群每日最高额度（留空=无限制）<input id="bot-group-day" type="number" min="0.0001" step="0.0001" inputmode="decimal" placeholder="无限制"></label><label class="bot-toggle"><input id="bot-enable" type="checkbox"><span>允许此群所有成员使用</span></label><button id="bot-save" type="submit" class="dark">保存安全策略</button></form>
 <p id="bot-notice" role="status" aria-live="polite">群令牌功能默认关闭。</p><p class="hint">当前按已确认策略：每次最多 20；个人每日与全群每日留空代表不设累计上限。注意：每日不限意味着没有日总额度保护，除单次上限外仍依赖短时频率限制、创建未知状态全局暂停及管理员审计。密钥不发到群里，不自动重试创建或重发私聊密钥。策略使用 Windows 本机加密保存。发布前核对应用可见范围、目标群类型、外部群/外部成员适用权限和机器人私聊能力；需要全群成员可用时，不能只发布给应用所有者或少数测试成员。</p></section>
-<section id="registration-history" class="history" aria-labelledby="registration-title"><div class="section-title"><div><p class="eyebrow">REGISTRATION / SEPARATE LEDGER</p><h2 id="registration-title">用户注册记录</h2></div><button id="registration-refresh" type="button">刷新注册记录</button></div>
+<section id="registration-history" class="history" data-admin-view="registration-history" hidden aria-labelledby="registration-title"><div class="section-title"><div><p class="eyebrow">REGISTRATION / SEPARATE LEDGER</p><h2 id="registration-title">用户注册记录</h2></div><button id="registration-refresh" type="button">刷新注册记录</button></div>
 <p class="hint">仅普通用户 · 并发1–50 · 初始余额0 / 1 / 5 / 10。与令牌额度账本分离，不保存密码。结果未知时暂停新注册，须先在平台按邮箱及备注操作编号核对。</p>
 <p id="registration-notice" role="status" aria-live="polite">正在读取注册记录…</p><div class="history-table-wrap" tabindex="0" role="region" aria-label="用户注册记录表"><table class="history-table"><thead><tr><th>时间／发起人</th><th>账号／用户名</th><th>余额／并发</th><th>状态／人工核对</th></tr></thead><tbody id="registration-rows"></tbody></table></div>
 <div class="history-pager"><button id="registration-prev" type="button">上一页</button><span id="registration-page"></span><button id="registration-next" type="button">下一页</button></div></section>
-<section id="history" class="history" aria-labelledby="history-title"><div class="section-title"><div><p class="eyebrow">OPERATIONS / LOCAL LEDGER</p><h2 id="history-title">全部令牌创建记录</h2></div><button id="history-refresh" type="button">刷新记录</button></div>
+<section id="history" class="history" data-admin-view="token-history" hidden aria-labelledby="history-title"><div class="section-title"><div><p class="eyebrow">OPERATIONS / LOCAL LEDGER</p><h2 id="history-title">全部令牌创建记录</h2></div><button id="history-refresh" type="button">刷新记录</button></div>
 <p class="muted">仅本工具的本机记录，含不同平台账户。操作人由客户手动填写、未核验；平台账户 ID 是授权账户，不等于操作人。额度不是实际消费。</p>
 <form id="history-filter" class="history-filter"><div><label for="history-search">搜索操作人、分组、令牌 ID／名称、额度或操作编号</label><input id="history-search" maxlength="200" type="search" placeholder="例如：客户账号 / 分组名称 / Key ID"></div><div><label for="history-status">创建状态</label><select id="history-status"><option value="">全部状态</option><option value="success">创建成功</option><option value="pending">处理中</option><option value="unknown">结果待核对</option><option value="failed">明确拒绝</option><option value="reviewed">已人工核对</option></select></div><button type="submit" class="dark">查询</button></form>
 <p id="history-notice" role="status" aria-live="polite">正在读取本机创建记录…</p><p id="history-summary" class="muted"></p>
@@ -33,4 +46,79 @@
 <section id="history-detail" hidden aria-labelledby="history-detail-title"><div class="section-title"><h2 id="history-detail-title">操作详情</h2><button id="history-close" type="button">关闭详情</button></div><dl id="history-fields" class="history-fields"></dl>
 <label for="history-key">完整令牌密钥 · 默认隐藏</label><div class="key-row"><input id="history-key" type="password" readonly autocomplete="off" placeholder="点击显示后读取本机加密回执"><button id="history-reveal" type="button">显示密钥</button><button id="history-copy" type="button">复制密钥</button></div><p class="hint">显示和复制会记入操作过程；复制后 60 秒清除本工具写入的剪贴板。隐藏或关闭详情立即清空页面密钥。</p>
 <h3>操作过程</h3><ol id="history-events"></ol></section></section>
-<footer>仅本机管理入口<span>不是操作系统权限隔离；请勿向客户分发管理员会话。</span></footer></main><script src="admin-renderer.js"></script><script src="admin-history.js"></script><script src="admin-registration.js"></script></body></html>
+<section class="history" id="group-settings" data-admin-view="group-settings" hidden aria-labelledby="group-settings-title"><div class="section-title"><h2 id="group-settings-title">分组设置 · 管理员专用</h2><button id="settings-refresh" type="button">读取倍率配置分组</button></div>
+<p class="hint">此处独立于“令牌分组”：读取平台全部启用的标准分组（含专属分组），填写菜单显示名称后发布。仅已绑定的飞书管理员可选择平台用户、勾选分组授权并设置专属倍率；普通群成员不可使用。留空名称不发布，保存别名不会修改平台用户。</p>
+<p id="settings-notice" role="status" aria-live="polite">请先完成平台管理员授权，再读取分组。</p>
+<form id="settings-form"><div id="settings-rows"></div><div class="settings-save-bar"><button id="settings-save" class="dark" disabled>保存并发布倍率配置分组</button><p id="settings-save-status" role="status" aria-live="polite">请先读取分组，再填写名称并发布。</p></div></form>
+<h3>分组设置记录</h3><p class="hint">最近100条当前管理员的操作。结果未知时仅回读，不自动重发；先到平台按用户ID核对，再决定是否人工解除保护。</p><button id="settings-records-refresh" type="button">刷新分组设置记录</button><div id="settings-records"></div></section>
+<section class="history" data-admin-view="operation-log" hidden aria-labelledby="operation-log-title"><div class="section-title"><h2 id="operation-log-title">操作日志</h2><button id="operation-log-refresh" type="button">刷新日志</button></div><p class="hint">记录本机管理员的读取、保存、授权、连接和核对操作。日志从本版本启用后开始记录；不包含密码、密钥、邮箱、分组名称或接口响应原文。连接操作完成只代表操作已执行，在线状态以管理配置页为准；业务结果以对应账本为准。</p>
+<div class="operation-log-filters"><label>结果<select id="operation-log-filter"><option value="all">全部</option><option value="failure">失败</option><option value="running">处理中</option><option value="success">完成</option><option value="interrupted">中断待核对</option></select></label><label>检索操作或编号<input id="operation-log-search" type="search" maxlength="100" placeholder="例如：发布倍率分组 / INPUT / 操作编号"></label></div>
+<section class="local-record-table"><h3>项目内创建记录表</h3><p class="hint">“本机数据”文件夹自动保存CSV明细与变化轨迹，不包含密码或完整密钥。Excel表格快照需另行更新；以CSV更新时间和原业务账本为准。不要将整个文件夹上传或分享。</p><p id="record-table-status" role="status"></p><button id="record-table-sync" type="button">立即更新记录表</button><button id="record-table-open" type="button">打开本机数据文件夹</button></section>
+<p id="operation-log-notice" role="status" aria-live="polite"></p><div id="operation-log-rows"></div></section>
+<section id="channel-monitor" class="history" data-admin-view="channel-monitor" hidden aria-labelledby="channel-monitor-title">
+<div class="section-title"><h2 id="channel-monitor-title">渠道监控</h2><button id="channel-monitor-refresh" type="button">刷新显示状态</button></div>
+<p id="channel-monitor-notice" role="status" aria-live="polite">正在读取渠道状态…</p><div id="channel-monitor-rows" class="channel-monitor-grid"></div>
+<details class="channel-alert-settings"><summary>低余额邮件提醒设置</summary>
+<p class="hint">五个渠道分别按本站原单位与您设置的阈值比较；只有本次金额低于阈值才触发低余额邮件，每渠道每收件人同一低余额区间仅提醒一次。每日汇总独立于阈值，到点给全部收件人各发一封；未取得有效金额会注明，不使用旧值。发送结果不明不自动重试。</p>
+<label>QQ 发件邮箱<input id="channel-alert-sender" type="email" autocomplete="off" maxlength="254" placeholder="例如：您的QQ邮箱"></label>
+<label>QQ SMTP 授权码<input id="channel-alert-code" type="password" autocomplete="new-password" maxlength="256" placeholder="仅在本机输入，不是邮箱登录密码"></label>
+<label>收件邮箱（可填多个，用逗号、分号或换行分隔，最多 10 个）<textarea id="channel-alert-recipients" rows="3" maxlength="3000" placeholder="每行一个收件邮箱"></textarea></label>
+<label>低余额阈值（各渠道按自身单位，须大于 0）<input id="channel-alert-threshold" type="number" min="0.0001" max="1000000000000" step="0.0001" inputmode="decimal" value="2000"></label>
+<label>每日汇总时间（北京时间；留空不发送每日汇总）<input id="channel-alert-daily-time" type="time" step="60"></label>
+<p class="hint">每日汇总只在程序运行且到达设定时分后的 15 分钟内尝试一次；停机或休眠错过不会补发。保存新时间当天不追发已过时点。低余额邮件仍按渠道独立触发，可能与每日汇总同一天各收到一封。</p>
+<div class="channel-buttons"><button id="channel-alert-save" type="button">加密保存并启用提醒</button><button id="channel-alert-pause" type="button">暂停提醒</button><button id="channel-alert-clear" type="button">清除提醒配置</button></div>
+<div class="channel-buttons"><label for="channel-alert-test-scope">测试收件范围</label><select id="channel-alert-test-scope"><option value="all">全部已配置收件邮箱（各一封）</option><option value="first">仅第一个收件邮箱</option></select><button id="channel-alert-test" type="button">发送一次测试邮件</button></div>
+<p class="hint">测试邮件列出五个渠道的网址和最近一次成功读取的金额与时间；未取得有效金额的渠道会如实注明，不会伪造余额。测试不会改变正式低余额提醒的去重状态。</p>
+<p id="channel-alert-status" role="status" aria-live="polite"></p></details>
+<details class="channel-monitor-help"><summary>监控与登录说明</summary><p class="hint">五个渠道分别显示金额，不混合相加。名称和加密自动登录在每张卡片的展开设置中，默认不保存密码；会话失效时每站最多自动尝试一次，失败暂停。验证码、二次验证和安全警告需您亲自处理。</p><p class="hint">前两个站点若显示网页自身的异常/返回页面，请您确认后自行处理；证书或浏览器安全警告不可绕过。金额未定位时旧值仅标为“上次结果”，不是当前余额。</p></details>
+</section>
+<section id="user-ownership" class="history" data-admin-view="user-ownership" hidden aria-labelledby="user-ownership-title"><div class="section-title"><h2 id="user-ownership-title">用户归属</h2><button id="ownership-refresh" type="button">读取平台用户与查询申请</button></div>
+<p class="hint">先按归属姓名建立档案并勾选平台用户。成员从已绑定群 @机器人、在私聊点“用户查询”后，机器人会回显飞书显示名和身份摘要；管理员核对身份并明确绑定到姓名档案后，该成员再次点击“用户查询”即可直接查看自己的归属账号，无需输入姓名。显示名本身不是身份验证。</p>
+<p id="ownership-notice" role="status" aria-live="polite">请先读取平台用户与查询申请。</p>
+<p id="ownership-draft-status" role="status" aria-live="polite">未读取草稿状态。</p>
+<label>归属档案<select id="ownership-profile"><option value="">新建归属姓名</option></select></label>
+<label>归属姓名<input id="ownership-name" type="text" maxlength="100" autocomplete="off" placeholder="填写唯一的完整姓名"></label>
+<label>待核对／已绑定飞书成员<select id="ownership-identity"><option value="">暂无登记</option></select></label>
+<label>将选中成员绑定到姓名档案<select id="ownership-link-profile"><option value="">请选择已保存的姓名档案</option></select></label>
+<button id="ownership-link-save" type="button" disabled>核对身份并保存绑定</button>
+<p id="ownership-link-notice" role="status" aria-live="polite">请先核对成员身份，再绑定；不会凭同名自动匹配。</p>
+<label>搜索平台用户（用户名、邮箱或ID）<input id="ownership-search" type="search" maxlength="200" placeholder="输入关键词筛选"></label>
+<p id="ownership-summary" class="muted"></p><div id="ownership-users" class="ownership-users"></div>
+<div class="settings-save-bar"><button id="ownership-save" class="dark" type="button" disabled>保存此姓名的用户归属</button><p class="hint">取消全部勾选并保存，该姓名仍保留档案但查询结果为空。余额每次查询时重新读取平台；同名档案不得重复建立。</p></div>
+<details class="ownership-query-history"><summary>最近归属修改记录</summary><p class="hint">仅显示最近 100 条；完整加密快照保存在本机归属记录文件中，旧版本记录可能没有时间。</p><div id="ownership-change-rows"></div></details>
+<details class="ownership-query-history"><summary>最近查询记录</summary><p class="hint">仅显示最近 100 条：已绑定身份摘要、归属档案姓名、时间、结果及用户数量；不保存查询时的余额快照。</p><div id="ownership-query-rows"></div></details></section>
+<section id="daily-usage" class="history" data-admin-view="user-ownership" hidden aria-labelledby="daily-usage-title">
+<h3 id="daily-usage-title">归属用户每日用量</h3>
+<p class="hint">每位归属人一张最近 3 天的滚动日表，逐账号显示邮箱与用户实付金额。仅发送到当前绑定目标群，该群全体成员都能看到。今日数据约每小时更新同一张卡片；跨日后补读上一日并固定。程序须保持运行。</p>
+<div class="channel-buttons"><button id="daily-usage-preview" type="button">预览今日用量</button><button id="daily-usage-enable" type="button">启用并首次发布到群</button><button id="daily-usage-pause" type="button">暂停群发布</button></div>
+<p id="daily-usage-status" role="status" aria-live="polite">每日用量群表默认关闭。</p>
+<div id="daily-usage-preview-rows"></div>
+</section>
+<section id="usage-history" class="history" data-admin-view="usage-history" hidden aria-labelledby="usage-history-title">
+<div class="section-title"><h2 id="usage-history-title">归属用量 · 历史周表</h2><button id="usage-history-refresh" type="button">重新读取本机记录</button></div>
+<p class="hint">Excel 风格周表，不受群卡片最近 3 天限制。按北京时间周一至周日统计用户实付（USD）；没有采集的日期显示“未记录”，不是 0。今日显示“进行中”，周合计未完整时仅为已记录小计。手动补采仅查询本月已结束日期，并按当前归属回填，不代表当日历史归属；本页绝不发群。</p>
+<div class="channel-buttons"><button id="usage-history-backfill" type="button">补采本月已结束日期</button></div>
+<p id="usage-history-backfill-status" role="status" aria-live="polite">补采不会自动开始。读取量较大时可能需要数分钟；每次最多运行 10 分钟，未完成可再次点击续采。</p>
+<div class="usage-history-filters">
+<label>月份<select id="usage-history-month" aria-label="选择月份"></select></label>
+<label>周<select id="usage-history-week" aria-label="选择周"></select></label>
+<label>所属人<select id="usage-history-person" aria-label="选择所属人"></select></label>
+</div>
+<p id="usage-history-status" role="status" aria-live="polite">打开此栏目后读取本机历史记录。</p>
+<div id="usage-history-table" class="usage-history-table-wrap"></div>
+</section>
+<section id="account-management" class="history" data-admin-view="account-management" hidden aria-labelledby="account-management-title"><div class="section-title"><h2 id="account-management-title">账号管理 · 定时调度</h2><button id="account-schedule-refresh" type="button">读取平台账号与计划</button></div>
+<p class="hint">对应平台账号管理页的“调度”开关。每条计划选择两个不同账号，按北京时间分别指定第一次、第二次执行的完整年月日时分；可跨日、跨月。计划保存后会自动执行一次，须保持本机程序运行和管理员授权有效。</p>
+<p id="account-schedule-notice" role="status" aria-live="polite">请先读取平台账号。</p>
+<label>搜索账号（名称、平台或 ID）<input id="account-schedule-search" type="search" maxlength="100" placeholder="搜索只筛选下方账号列表"></label>
+<div id="account-schedule-accounts" class="account-schedule-accounts"></div>
+<form id="account-schedule-form" class="account-schedule-form"><h3>添加一次性切换计划</h3>
+<div class="account-schedule-fields"><label>要打开调度的账号<select id="account-schedule-open" required></select></label>
+<label>要关闭调度的账号<select id="account-schedule-close" required></select></label>
+<label>执行顺序<select id="account-schedule-order"><option value="open-first">先打开，再关闭</option><option value="close-first">先关闭，再打开</option></select></label>
+<label>第一步 · 北京时间<input id="account-schedule-first" type="datetime-local" step="60" required></label>
+<label>第二步 · 北京时间<input id="account-schedule-second" type="datetime-local" step="60" required></label></div>
+<p class="hint">两步可填同一时分，仍会严格依次执行；第二步也可填次日或下个月。程序停机、休眠或授权失效超过执行时间 5 分钟后，该步记为错过，不会醒来补做。结果不明时暂停后续步骤，需人工核对。</p>
+<button id="account-schedule-create" class="dark" type="submit" disabled>保存并启用计划</button></form>
+<h3>已保存计划</h3><div id="account-schedule-plans"></div></section>
+<footer>仅本机管理入口<span>不是操作系统权限隔离；请勿向客户分发管理员会话。</span></footer></main><script src="admin-renderer.js"></script><script src="admin-history.js"></script><script src="admin-registration.js"></script><script src="admin-group-settings.js"></script><script src="admin-navigation.js"></script><script src="admin-operation-log-view.js"></script><script src="admin-channel-monitor.js"></script><script src="admin-channel-alert.js"></script><script src="admin-user-ownership.js"></script><script src="admin-daily-usage.js"></script><script src="admin-usage-history.js"></script><script src="admin-account-schedule.js"></script></body></html>

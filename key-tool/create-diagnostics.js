@@ -1,6 +1,7 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
+const { knownReason, publicFailure } = require('./platform-error');
 const CODES = new Set(['BUSY','AUTH','INPUT','POLICY','BUDGET','CONFLICT','UNKNOWN','NOT_SENT',
   'NETWORK','HTTP','SCHEMA','API','ROUTE','STORAGE','OPERATION_ERROR']);
 const STAGES = new Set(['admission','validation','identity','groups','policy','pending-storage',
@@ -11,12 +12,17 @@ function failureDiagnostic(requestId, error, stage = 'unknown') {
     requestId: typeof requestId === 'string' && /^[a-f0-9-]{36}$/.test(requestId) ? requestId : null,
     code: CODES.has(error?.code) ? error.code : 'OPERATION_ERROR',
     stage: STAGES.has(stage) ? stage : 'unknown',
-    httpStatus: Number.isInteger(error?.httpStatus) && error.httpStatus >= 100 && error.httpStatus <= 599 ? error.httpStatus : null };
+    httpStatus: Number.isInteger(error?.httpStatus) && error.httpStatus >= 100 && error.httpStatus <= 599 ? error.httpStatus : null,
+    reason: knownReason(error?.reason) };
 }
 function failureHint(row) {
-  if (['UNKNOWN','NOT_SENT'].includes(row.code) || ['submission','receipt-storage','unknown'].includes(row.stage)) {
+  if (row.reason && row.stage === 'submission' && ['HTTP','API'].includes(row.code))
+    return publicFailure('token', { code: row.code, reason: row.reason, definitive: true, attempted: true, httpStatus: row.httpStatus });
+  if (['UNKNOWN','NOT_SENT'].includes(row.code) || ['receipt-storage','unknown'].includes(row.stage)) {
     return '本次创建未能确认完成。请联系管理员按操作编号核对，不要重复创建。';
   }
+  if (row.stage === 'submission' && ['HTTP','API'].includes(row.code))
+    return publicFailure('token', { code: row.code, definitive: true, attempted: true, httpStatus: row.httpStatus });
   return ({ BUSY: '当前有其他操作正在处理，本次未提交。请稍后重新发起申请。',
     AUTH: '平台授权检查未通过，本次未提交。请联系管理员维护授权。',
     INPUT: '申请参数或所选分组已变化，本次未提交。请联系管理员核对分组。',

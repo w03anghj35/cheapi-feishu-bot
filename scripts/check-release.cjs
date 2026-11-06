@@ -19,6 +19,7 @@ const rules = [
 ];
 const findings = [];
 for (const file of files) {
+  if(file.startsWith('本机数据/')){findings.push({file,rule:'private-record-table'});continue;}
   if (/(?:^|\/)(?:node_modules|outputs|\.runtime|dist|CheapiKeyStudio[^/]*)(?:\/|$)|(?:^|\/)\.env(?:\.|$)|\.(?:journal|db|sqlite\d*|log|tmp|zip|7z|exe|pem|key)$|(?:^|\/)(?:config\.json|\.npmrc|Cookies|Local State)$/i.test(file)) {
     findings.push({ file, rule: 'forbidden-runtime-file' }); continue;
   }
