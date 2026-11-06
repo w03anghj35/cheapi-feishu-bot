@@ -21,7 +21,10 @@
   function hideKey() { secretVersion++; el('history-key').value = ''; el('history-key').type = 'password'; el('history-reveal').textContent = '显示密钥'; }
   function fields(r) {
     el('history-fields').replaceChildren();
-    const values = [ ['操作人／客户账号', r.operator.name || '未记录（旧记录）'], ['身份来源', r.operator.source === 'self-reported' ? '手动填写 · 未核验' : '未记录'],
+    const actor=r.operator,feishu=actor.source==='feishu-open-id';
+    const values = [ ['操作人／客户账号', actor.displayName || (feishu?'飞书姓名未获取':actor.name || '未记录（旧记录）')],
+      ['身份来源', feishu?(actor.nameSource==='feishu-current-member'?'当前群成员姓名 · 非创建时快照':actor.displayName?'飞书群成员姓名 · 创建时快照':'飞书身份已核验 · 姓名未获取'):actor.source === 'self-reported' ? '手动填写 · 未核验' : '未记录'],
+      ...(feishu?[['身份标识（同名区分）',actor.name]]:[]),
       ['授权平台账户 ID', r.owner ?? '未记录'], ['操作编号', r.requestId], ['创建时间', dates(r.at)], ['最后更新', dates(r.updatedAt)],
       ['创建状态', labels[r.state] || r.state], ['令牌名称（平台提交值）', r.name], ['令牌 ID', r.keyId ?? '未取得／旧记录未缓存'], ['令牌标识', r.maskedKey],
       ['客户分组（创建时）', r.group.customerName ?? '未记录'], ['原始分组（创建时）', r.group.originalName ?? '未记录'], ['分组 ID', r.group.id ?? '未记录'],
@@ -54,7 +57,9 @@
       el('history-rows').replaceChildren();
       for (const r of data.items) {
         const tr = document.createElement('tr'), a = document.createElement('td'), b = document.createElement('td'), c = document.createElement('td'), d = document.createElement('td');
-        a.append(text('strong', r.operator.name || '操作人未记录'), text('p', dates(r.at), 'muted'), text('p', `授权账户 ID ${r.owner ?? '未记录'} · ${r.operator.source === 'self-reported' ? '手填未核验' : '旧记录'}`, 'muted'));
+        const feishu=r.operator.source==='feishu-open-id';
+        a.append(text('strong', r.operator.displayName || (feishu?'飞书姓名未获取':r.operator.name || '操作人未记录')), text('p', dates(r.at), 'muted'), text('p', `授权账户 ID ${r.owner ?? '未记录'} · ${feishu?(r.operator.nameSource==='feishu-current-member'?'当前飞书姓名':r.operator.displayName?'创建时飞书姓名':'飞书身份已核验'):r.operator.source === 'self-reported' ? '手填未核验' : '旧记录'}`, 'muted'));
+        if(feishu)a.append(text('p',`同名区分：${r.operator.name.slice(-8)}`,'muted'));
         b.append(text('strong', r.group.customerName ?? '客户名称未记录'), text('p', `${r.group.originalName ?? '原始名称未记录'} · ID ${r.group.id ?? '—'}`, 'muted'));
         c.append(text('strong', `额度 ${r.quota ?? '—'}`), text('p', `Key ID ${r.keyId ?? '未取得'} · ${r.maskedKey}`, 'muted'), text('p', r.name, 'muted'));
         const badge = text('span', labels[r.state] || r.state, 'history-state'); badge.dataset.state = r.state;
@@ -64,7 +69,9 @@
       if (!data.items.length) { const tr = document.createElement('tr'), td = text('td', '暂无符合条件的创建记录。'); td.colSpan = 4; tr.append(td); el('history-rows').append(tr); }
       el('history-summary').textContent = `当前筛选 ${data.total} 条 · 成功 ${data.counts.success} · 待核对 ${data.counts.pending + data.counts.unknown} · 明确拒绝 ${data.counts.failed} · 人工核对 ${data.counts.reviewed}`;
       el('history-page').textContent = `第 ${page} / ${pages} 页 · 每页 20 条`;
-      message('本机记录已更新。旧记录缺失的操作人和历史分组名称不会补猜。');
+      message('本机记录已更新。飞书姓名优先显示；“当前飞书姓名”是旧记录的当前成员匹配，不是创建时快照。'
+        +(data.nameState?.reason==='permission'?' 姓名读取缺少权限或不在群内，请开通“查看群成员”并发布。':
+          ['failed','limit'].includes(data.nameState?.reason)?' 飞书姓名读取未完成，保留身份标识以供核对。':''));
     } catch (e) { if (version === filterVersion) message(e.message, true); }
     finally { listBusy = false; controls(); if (queued) { queued = false; schedule(); } }
   }
@@ -91,6 +98,7 @@
   }
   el('history-reveal').onclick = () => secret('secret'); el('history-copy').onclick = () => secret('copySecret');
   window.addEventListener('blur', hideKey);
+  window.addEventListener('admin-view-change', event => { if (event.detail.view !== 'token-history') hideKey(); });
   window.groupAdmin.onRecordsChanged(schedule);
   load();
 })();

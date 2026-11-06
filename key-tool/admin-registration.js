@@ -17,7 +17,8 @@
       const data = result.data; page = data.page; pages = data.pages;
       el('rows').replaceChildren();
       for (const row of data.items) {
-        const tr = document.createElement('tr'), status = cell(labels[row.state] || row.state, row.requestId, row.errorCode || '');
+        const reasons={EMAIL_EXISTS:'邮箱已存在',USER_EXISTS:'用户已存在',USERNAME_EXISTS:'用户名已被使用'};
+        const tr = document.createElement('tr'), status = cell(labels[row.state] || row.state, row.requestId, row.errorCode || '', reasons[row.errorReason] || '');
         if (['pending', 'unknown'].includes(row.state)) {
           const button = document.createElement('button'); button.textContent = '已去平台核对…'; button.type = 'button';
           button.onclick = async () => {
@@ -31,12 +32,15 @@
           };
           status.append(button);
         }
-        tr.append(cell(new Date(row.at).toLocaleString('zh-CN'), row.operator, `授权账户 ${row.owner}`),
+        const feishu=/^飞书用户#[a-f0-9]{20}$/.test(row.operatorIdentity||'');
+        tr.append(cell(new Date(row.at).toLocaleString('zh-CN'), feishu&&row.operator===row.operatorIdentity?'飞书姓名未获取':row.operator,
+          ...(feishu?[`${row.operatorNameSource==='feishu-current-member'?'当前飞书姓名':row.operatorNameSource?'创建时飞书姓名':'身份已核验'} · 同名区分 ${row.operatorIdentity.slice(-8)}`]:[]),`授权账户 ${row.owner}`),
           cell(row.email, row.username, `用户 ID ${row.userId || '未取得'}`), cell(`初始余额 ${row.balance}`, `并发 ${row.concurrency}`, '普通用户'), status);
         el('rows').append(tr);
       }
       if (!data.items.length) { const tr = document.createElement('tr'), td = cell('暂无注册记录'); td.colSpan = 4; tr.append(td); el('rows').append(tr); }
-      el('notice').textContent = `共 ${data.total} 条 · 待核对 ${data.blocked} 条${data.storageError ? ' · 存储异常，注册已锁定' : ''}。不包含密码。`;
+      el('notice').textContent = `共 ${data.total} 条 · 待核对 ${data.blocked} 条${data.storageError ? ' · 存储异常，注册已锁定' : ''}。不包含密码。`
+        +(data.nameState?.reason==='permission'?' 姓名读取缺少权限或不在群内，请开通“查看群成员”并发布。':'');
       el('page').textContent = `第 ${page} / ${pages} 页`;
     } catch (error) { el('notice').textContent = error.message; }
     finally { busy = false; controls(); if (queued) { queued = false; load(); } }

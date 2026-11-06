@@ -5,6 +5,7 @@ const { WebSocketServer } = require('ws');
 const Lark = require('@larksuiteoapi/node-sdk');
 const { createClient } = require('./feishu-sdk');
 const { FeishuConnection } = require('./feishu-connection');
+const { FeishuReconnect } = require('./feishu-reconnect');
 const record = { appId: 'cli_1234567890abcdef', appSecret: 'fixture-only-not-real', savedAt: '2026-10-28T08:00:00Z' };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -27,12 +28,46 @@ test('SDK sends interactive JSON privately with UUID and authoritative message I
   assert.deepEqual(JSON.parse(f.calls[0].data.content), f.card);
   assert.match(f.calls[0].data.uuid, /^[a-f0-9-]{36}$/);
 });
+test('SDK creates and patches only bounded non-interactive group usage cards', async () => {
+  const calls = [];
+  const client = createClient({ ...record, handlers: {}, onDiagnostic() {} }, { ...Lark,
+    WSClient: class { getConnectionStatus() { return { state: 'idle' }; } close() {} },
+    Client: class { im = { message: { create: async input => { calls.push(['create', input]);
+      return { code: 0, data: { message_id: 'om_fixture_usage_12345678' } }; } },
+    v1: { message: { patch: async input => { calls.push(['patch', input]); return { code: 0 }; } } } }; }
+  });
+  const card = { config: { wide_screen_mode: true, enable_forward: false, update_multi: true },
+    elements: [{ tag: 'div', text: { tag: 'plain_text', content: 'synthetic usage' } }] };
+  assert.equal(await client.sendGroupCard({ chatId: 'oc_fixture_12345678', card }), 'om_fixture_usage_12345678');
+  assert.equal(calls[0][1].params.receive_id_type, 'chat_id');
+  assert.equal(calls[0][1].data.receive_id, 'oc_fixture_12345678');
+  assert.equal(await client.patchGroupCard({ messageId: 'om_fixture_usage_12345678', card }), 'om_fixture_usage_12345678');
+  assert.equal(calls[1][1].path.message_id, 'om_fixture_usage_12345678');
+  await assert.rejects(client.sendGroupCard({ chatId: 'oc_fixture_12345678', card: { ...card,
+    elements: [{ tag: 'action', actions: [] }] } }));
+  await assert.rejects(client.sendGroupCard({ chatId: 'oc_other', card }));
+  assert.equal(calls.length, 2);
+});
+test('member-name adapter requests exact bound group open_id pages and sanitizes permission failures',async()=>{
+  let response={code:0,data:{items:[],has_more:false}},calls=[];
+  const client=createClient({...record,handlers:{},onDiagnostic(){}},{...Lark,
+    WSClient:class{},Client:class{im={chatMembers:{get:async input=>{calls.push(input);return response;}}};}});
+  await client.listGroupMembers('oc_group_12345678','fixture-next');
+  assert.deepEqual(calls[0],{path:{chat_id:'oc_group_12345678'},params:{member_id_type:'open_id',page_size:100,page_token:'fixture-next'}});
+  response={code:99991672,msg:'fictional secret response'};
+  await assert.rejects(client.listGroupMembers('oc_group_12345678'),e=>e.code==='DENIED'&&!e.message.includes('fictional'));
+  await assert.rejects(client.listGroupMembers('other'));
+});
 
 test('SDK rejects group delivery, forwardable cards, oversized UTF8 and uncertain message IDs', async () => {
   const f = cardClient(), payload = { receiveIdType: 'open_id', receiveId: 'ou_fixture_member', card: f.card };
   await assert.rejects(f.client.sendCard({ ...payload, receiveIdType: 'chat_id' }));
   await assert.rejects(f.client.sendCard({ ...payload, card: { ...f.card, config: { enable_forward: true } } }));
   await assert.rejects(f.client.sendCard({ ...payload, card: { ...f.card, large: '汉'.repeat(10000) } }));
+  await assert.rejects(f.client.sendCard({ ...payload, card: { ...f.card, elements: [
+    { tag: 'form', name: 'fixture_invalid', elements: [{ tag: 'div', text: { tag: 'plain_text', content: 'fixture' } },
+      { tag: 'button', name: 'submit', action_type: 'form_submit' }] }
+  ] } }), /unsupported direct form child/);
   assert.equal(f.calls.length, 0);
   for (const response of [{ code: 1, msg: 'fixture not disclosed' }, { code: 0, data: {} }, { code: 0, data: { message_id: 7 } }]) {
     f.setResponse(response); await assert.rejects(f.client.sendCard(payload), /card delivery failed/);
@@ -101,4 +136,25 @@ test('real SDK retryable internal error is bounded by the controller deadline', 
   await until(() => connection.state().phase === 'failed');
   assert.equal(connection.state().error.code, 'TIMEOUT'); assert.equal(connection.state().active, false);
   const count = pulls; await sleep(150); assert.equal(pulls, count);
+});
+test('supervisor replaces a failed real SDK instance and reconnects to loopback without a UI', { timeout: 8000 }, async t => {
+  const server = new WebSocketServer({host:'127.0.0.1',port:0});
+  await new Promise(resolve=>server.once('listening',resolve));
+  let pulls=0, instances=0, now=0;
+  const sdk={...Lark,WSClient:class extends Lark.WSClient{
+    constructor(options){instances++;super({...options,httpInstance:{request:async()=>{
+      pulls++;
+      if(pulls===1)return {code:514,data:{},msg:'fictional connection failure'};
+      return {code:0,data:{URL:`ws://127.0.0.1:${server.address().port}/?device_id=fixture&service_id=1`,
+        ClientConfig:{PingInterval:60,ReconnectCount:2,ReconnectInterval:0.01,ReconnectNonce:0}}};
+    }}});}
+  }};
+  const connection=new FeishuConnection({store:{load:()=>record},createClient:options=>createClient(options,sdk)});
+  const watchdog=new FeishuReconnect({connection,ensureReady:async()=>{},now:()=>now,timers:{setTimeout(){return 1;},clearTimeout(){}}});
+  t.after(async()=>{watchdog.stop();for(const socket of server.clients)socket.terminate();await new Promise(r=>server.close(r));});
+  await watchdog.start();await until(()=>connection.state().phase==='failed');
+  await watchdog.tick();assert.equal(watchdog.state().nextRetryAt,5000);
+  now=5000;await watchdog.tick();await until(()=>connection.state().phase==='connected');
+  assert.equal(instances,2);assert.equal(pulls,2);assert.equal(server.clients.size,1);
+  watchdog.stop();now+=60000;await watchdog.tick();assert.equal(pulls,2);
 });

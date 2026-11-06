@@ -3,8 +3,10 @@
 const { createHash, randomBytes } = require('node:crypto');
 const { quotaUnits } = require('./service');
 const { failureDiagnostic, failureHint } = require('./create-diagnostics');
+const { publicFailure } = require('./platform-error');
 const { requestCard, PAGE_SIZE } = require('./feishu-request-cards');
-const { FEATURES, featureById, featureByText, isMenu } = require('./feishu-features');
+const { FEATURES, featureById, featureByText, isMenu, availableFeatures } = require('./feishu-features');
+const groupSettingsFlow = require('./feishu-group-settings');
 const { registrationPrompt, advanceRegistration, registrationFormValues } = require('./feishu-registration-flow');
 const menuNumber = text => /^[1-9]\d{0,2}$/.test(text) && Number(text) <= FEATURES.length;
 const isRequest = text => /^\/?(?:创建令牌|申请令牌|发送令牌|领取令牌)$/.test(text);
@@ -44,10 +46,13 @@ function actorFromOpenId(openId) {
 }
 
 class FeishuBotWorkflow {
-  constructor({ getPolicy, service, registrationService = null, sendText, sendCard = null, connection = null, now = () => Date.now(), random = () => randomBytes(12).toString('base64url'), onCandidate = () => {} }) {
+  constructor({ getPolicy, service, registrationService = null, groupSettingsService = null, userOwnership = null, resolveActorName = null, sendText, sendCard = null, connection = null, now = () => Date.now(), random = () => randomBytes(12).toString('base64url'), onCandidate = () => {} }) {
     this.getPolicy = getPolicy;
     this.service = service;
     this.registrationService = registrationService;
+    this.groupSettingsService = groupSettingsService;
+    this.userOwnership = userOwnership;
+    this.resolveActorName = resolveActorName;
     this.sendText = sendText;
     this.sendCard = sendCard;
     this.queuedCards = 0;
@@ -208,6 +213,8 @@ class FeishuBotWorkflow {
   }
 
   async promptQuick(openId, session, policy) {
+    session.isAdmin = openId === policy.ownerOpenId;
+    if (session.featureId === 'group-settings' && !session.isAdmin) { this.discardSession(openId); return false; }
     // Invalidate old controls before sending; an uncertain card delivery cannot enable its buttons.
     session.cardMessageId = null;
     try {
@@ -221,7 +228,9 @@ class FeishuBotWorkflow {
     if (this.sessions.get(openId) !== session || this.policy() !== policy) return false;
     let text;
     if (session.state === 'menu') {
-      text = '请选择功能：\n' + FEATURES.map((feature, i) => `${i + 1}. ${feature.label}`).join('\n') + '\n回复功能编号或名称，或发送“取消”。';
+      text = '请选择功能：\n' + availableFeatures(session.isAdmin).map((feature, i) => `${i + 1}. ${feature.label}`).join('\n') + '\n回复功能编号或名称，或发送“取消”。';
+    } else if (session.state.startsWith('settings-')) {
+      text = session.state === 'settings-confirm' ? '请核对最新分组卡片后确认。卡片发送失败，请回复“重新显示表单”重试；或发送“取消”。' : groupSettingsFlow.prompt(session);
     } else if (session.state.startsWith('register-')) {
       text = registrationPrompt(session);
     } else if (session.state === 'group') {
@@ -267,6 +276,44 @@ class FeishuBotWorkflow {
   async selectFeature(openId, session, policy, featureId) {
     const feature = featureById(featureId);
     if (!feature || session.state !== 'menu') return { status: 'invalid-feature' };
+    if (feature.adminOnly && openId !== policy.ownerOpenId) return { status: 'admin-required' };
+    if (feature.id === 'user-query') {
+      if (!this.userOwnership || this.userOwnership.storageFault) {
+        await this.send('open_id', openId, '用户查询暂不可用，请联系管理员检查本机归属配置。');
+        return { status: 'feature-unavailable', featureId: feature.id };
+      }
+      try {
+        const guard = () => this.policy() === policy && this.sessions.get(openId) === session && session.expiresAt > this.now();
+        const actor = await this.namedActor(openId, policy.groupId);
+        if (!guard()) return { status: 'policy-changed' };
+        const name = actor?.displayName || actor?.name || `飞书用户#${createHash('sha256').update(openId).digest('hex').slice(0, 12)}`;
+        const display = actor?.displayName ? clean(actor.displayName, 100) : '暂未取得';
+        const identity = createHash('sha256').update(openId).digest('hex').slice(0, 12);
+        const state = this.userOwnership.claim(openId, name);
+        if (state === 'pending') {
+          const sent = await this.send('open_id', openId,
+            `已登记您的查询申请。飞书显示名：${display}（仅供管理员核对，非实名验证）；身份摘要：${identity}。请管理员在本机“用户归属”中确认对应档案。绑定后从指定群再次 @机器人，点“用户查询”即可查看，无需输入姓名。`);
+          return { status: sent ? 'ownership-pending' : 'private-prompt-failed' };
+        }
+        const result = await this.userOwnership.query(openId);
+        if (!guard()) return { status: 'policy-changed' };
+        if (!result) return { status: 'ownership-pending' };
+        const delivered = await this.deliverUserQuery(openId, result, display);
+        return { status: delivered ? 'user-query-delivered' : 'user-query-delivery-unknown', count: result.users.length };
+      } catch (error) {
+        await this.send('open_id', openId, `用户查询失败，请联系管理员检查平台授权与归属配置。错误编号：${['AUTH','DENIED','SCHEMA','LIMIT','STORAGE','POLICY','CONFLICT'].includes(error?.code) ? error.code : 'NETWORK'}`);
+        return { status: 'user-query-failed' };
+      } finally { this.discardSession(openId); }
+    }
+    if (feature.id === 'group-settings') {
+      if (!this.groupSettingsService || this.groupSettingsService.storageFault) {
+        await this.send('open_id', openId, '分组设置服务未就绪，请在本机检查配置与记录。');
+        return { status: 'feature-unavailable' };
+      }
+      Object.assign(session, { featureId: feature.id, state: 'settings-user' });
+      await this.promptQuick(openId, session, policy);
+      return { status: 'feature-selected', featureId: feature.id };
+    }
     if (feature.id === 'register') {
       if (!this.registrationService || this.registrationService.storageFault || this.registrationService.blocked().length) {
         await this.send('open_id', openId, '用户注册暂不可用或有结果待管理员核对，请勿发送密码；令牌创建不受此注册保护影响。');
@@ -289,6 +336,21 @@ class FeishuBotWorkflow {
     Object.assign(session, { groups, page: 0, state: 'group', featureId: feature.id });
     await this.promptQuick(openId, session, policy);
     return { status: 'feature-selected', featureId: feature.id };
+  }
+
+  async deliverUserQuery(openId, result, display) {
+    const lines = result.users.map((u, i) => `${i + 1}. ${clean(u.username, 100)}（ID ${u.id}）\n账号：${clean(u.email, 254)}\n余额：${u.balance}\n状态：${u.status === 'active' ? '启用' : '未启用'}${u.concurrency === null ? '' : ` · 并发：${u.concurrency}`}`);
+    const header = `飞书显示名：${display}（仅供核对）\n用户归属：${clean(result.name, 100)}\n共 ${result.users.length} 个用户，按当前余额从小到大排列。`;
+    if (!lines.length) return this.send('open_id', openId, `${header}\n暂无归属用户。`);
+    let chunk = header;
+    for (const line of lines) {
+      if ((chunk + '\n\n' + line).length > 3500) {
+        if (!await this.send('open_id', openId, chunk)) return false;
+        chunk = '';
+      }
+      chunk += (chunk ? '\n\n' : '') + line;
+    }
+    return !chunk || this.send('open_id', openId, chunk);
   }
 
   async startQuick(event, openId, policy) {
@@ -337,7 +399,10 @@ class FeishuBotWorkflow {
         (session.privateChatId && session.privateChatId !== chatId) ||
         !session.cardMessageId || session.cardMessageId !== messageId ||
         value?.keyTool !== 'request-v1' || value.requestId !== session.requestId || value.nonce !== session.cardToken ||
-        !['group', 'quota', 'confirm', 'cancel', 'back', 'edit', 'page', 'custom', 'feature', 'balance', 'register-confirm', 'register-submit', 'register-edit'].includes(value.action) ||
+        !['group', 'quota', 'confirm', 'cancel', 'back', 'edit', 'page', 'custom', 'feature', 'balance', 'register-confirm', 'register-submit', 'register-edit',
+          'settings-user-submit','settings-submit','settings-confirm','settings-edit','settings-prev','settings-confirm-page'].includes(value.action) ||
+        ((session.featureId === 'group-settings' || value.featureId === 'group-settings' || value.action.startsWith('settings-')) && openId !== policy.ownerOpenId) ||
+        (value.action.startsWith('settings-') && session.featureId !== 'group-settings') ||
         (value.action === 'register-submit' && (session.state !== 'register-form' || session.featureId !== 'register')) ||
         (value.action === 'register-edit' && (session.state !== 'register-confirm' || session.registrationInput !== 'card')) ||
         (value.action === 'feature' && (session.state !== 'menu' || !featureById(value.featureId)))) return null;
@@ -350,6 +415,18 @@ class FeishuBotWorkflow {
     if (!context) return { toast: { type: 'warning', content: '此按钮不属于您的当前申请或已过期。请从群里 @机器人继续当前业务。' } };
     if (this.queuedCards >= MAX_ACTIVE_SESSIONS) return { toast: { type: 'warning', content: '当前操作较多，请稍后查看私聊。' } };
     let registration;
+    if (context.value.action === 'settings-user-submit') {
+      if (context.session.state !== 'settings-user' || event.action.tag !== 'button' || event.action.name !== 'group_settings_account_submit')
+        return { toast: { type: 'error', content: '请使用当前账号表单的查询按钮。' } };
+      try { registration = { settingsAccount: groupSettingsFlow.accountValue(event.action.form_value) }; }
+      catch (error) { return { toast: { type: 'error', content: error.message } }; }
+    }
+    if (context.value.action === 'settings-submit') {
+      if (context.session.state !== 'settings-form' || event.action.tag !== 'button' || event.action.name !== 'group_settings_submit')
+        return { toast: { type: 'error', content: '请使用当前分组表单提交。' } };
+      try { registration = { groupChanges: groupSettingsFlow.formValues(context.session, event.action.form_value) }; }
+      catch (error) { return { toast: { type: 'error', content: error.message } }; }
+    }
     if (context.value.action === 'register-submit') {
       if (event.action.tag !== 'button' || event.action.name !== 'registration_submit')
         return { toast: { type: 'error', content: '请使用注册表单中的“下一步：核对信息”按钮。' } };
@@ -380,6 +457,20 @@ class FeishuBotWorkflow {
     const message = { message: { chat_id: chatId } };
     if (value.action === 'cancel') return this.handleP2P(message, openId, '取消');
     if (value.action === 'feature') return this.selectFeature(openId, session, policy, value.featureId);
+    if (session.featureId === 'group-settings') {
+      if (value.action === 'settings-user-submit' && session.state === 'settings-user' && registration?.settingsAccount)
+        return this.handleGroupSettings(openId, session, policy, registration.settingsAccount);
+      if (value.action === 'settings-submit' && session.state === 'settings-form' && registration?.groupChanges) {
+        session.settingsDraft = session.settingsDraft.map(d => registration.groupChanges.find(c => c.groupId === d.groupId) || d);
+        session.settingsPage++;
+        if (session.settingsPage * groupSettingsFlow.SIZE >= session.groupPreview.groups.length) { session.state = 'settings-confirm'; session.confirmPage = 0; }
+      } else if (value.action === 'settings-prev' && session.state === 'settings-form' && session.settingsPage > 0) session.settingsPage--;
+      else if (value.action === 'settings-edit' && session.state === 'settings-confirm') { session.state = 'settings-form'; session.settingsPage = 0; }
+      else if (value.action === 'settings-confirm-page' && session.state === 'settings-confirm' && Number.isSafeInteger(value.page) && value.page >= 0 && value.page < Math.ceil(session.settingsDraft.length/10)) session.confirmPage = value.page;
+      else if (value.action === 'settings-confirm' && session.state === 'settings-confirm') return this.handleGroupSettings(openId, session, policy, '确认', true);
+      else return { status: 'invalid-card-action' };
+      await this.promptQuick(openId, session, policy); return { status: 'settings-step' };
+    }
     if (value.action === 'register-submit' && registration && session.state === 'register-form') {
       session.registration = { ...registration };
       session.state = 'register-confirm';
@@ -499,17 +590,52 @@ class FeishuBotWorkflow {
     delete session.registration.password;
     session.cardMessageId = null;
     try {
+      const actor=await this.namedActor(openId,session.groupId);
       const result = await this.registrationService.create(input, {
-        verifiedActor: actorFromOpenId(openId), feishuGroupId: session.groupId,
+        verifiedActor: actor, feishuGroupId: session.groupId,
         guard: () => this.policy() === policy && this.sessions.get(openId) === session && session.expiresAt > this.now()
       });
       const sent = await this.send('open_id', openId, '账号已创建。\n网址：https://max.cheapi.cc/\n账号：' + result.email + '\n用户名：' + result.username + '\n角色：普通用户\n并发数：' + result.concurrency + '\n初始余额：' + result.balance + '\n密码为您刚设置的密码，不再回显。');
       return { status: sent ? 'registered-and-delivered' : 'registered-delivery-unknown' };
     } catch (error) {
       const code = ['INPUT','AUTH','DENIED','POLICY','BUSY','STORAGE','DUPLICATE','UNKNOWN','HTTP','API','NETWORK','SCHEMA','OPERATION_ERROR'].includes(error?.code) ? error.code : 'OPERATION_ERROR';
-      await this.send('open_id', openId, '注册结果未能确认，请联系管理员核对；不要重复申请。\n错误编号：' + code + '\n操作编号：' + session.requestId);
+      const hint = publicFailure('registration', { code, reason:error?.reason, definitive:error?.definitive === true,
+        attempted:error?.attempted === true, httpStatus:error?.httpStatus });
+      await this.send('open_id', openId, `${hint}\n错误编号：${code}\n操作编号：${session.requestId}`);
       return { status: 'registration-failed', code };
     } finally { delete input.password; this.discardSession(openId); }
+  }
+
+  async handleGroupSettings(openId, session, policy, raw, confirmedCard = false) {
+    const guard = () => openId === policy.ownerOpenId && this.policy() === policy && this.sessions.get(openId) === session && session.expiresAt > this.now();
+    if (!guard()) { this.discardSession(openId); return { status: 'admin-required' }; }
+    if (raw === '取消') { this.discardSession(openId); await this.send('open_id', openId, '分组设置已取消，未提交修改。'); return { status: 'cancelled' }; }
+    try {
+      if (raw === '重新显示表单') {
+        await this.promptQuick(openId, session, policy); return { status: 'settings-step' };
+      }
+      if (session.state === 'settings-user') {
+        session.settingsAccount = groupSettingsFlow.accountValue({ account: raw });
+        const preview = await this.groupSettingsService.findUser(raw, guard);
+        if (!guard()) return { status: 'policy-changed' };
+        Object.assign(session, { groupPreview: preview, settingsDraft: groupSettingsFlow.initialDraft(preview), settingsPage: 0, state: 'settings-form' });
+      } else if (session.state === 'settings-confirm' && confirmedCard) {
+        session.cardMessageId = null;
+        try {
+          const result = await this.groupSettingsService.apply({ requestId: session.requestId, preview: session.groupPreview, changes: session.settingsDraft }, { guard });
+          const sent = await this.send('open_id', openId, `设置成功。\n平台用户 ID：${result.userId}\n邮箱：${clean(result.email,254)}\n已回读核对分组授权与专属倍率。\n操作编号：${session.requestId}`);
+          return { status: sent ? 'settings-saved' : 'settings-delivery-unknown' };
+        } finally { this.discardSession(openId); }
+      } else if (raw !== '重新显示表单') {
+        await this.send('open_id', openId, '请填写当前卡片并点击按钮核对、确认；也可发送“重新显示表单”或“取消”。');
+        return { status: 'settings-form-required' };
+      }
+      await this.promptQuick(openId, session, policy); return { status: 'settings-step' };
+    } catch (error) {
+      const code = ['INPUT','AUTH','DENIED','POLICY','BUSY','STORAGE','DUPLICATE','UNKNOWN','HTTP','API','NETWORK','SCHEMA','CONFLICT','LIMIT'].includes(error?.code) ? error.code : 'OPERATION_ERROR';
+      await this.send('open_id', openId, `分组设置未能确认成功，请核对本机分组设置记录；不会自动重试。\n错误编号：${code}\n操作编号：${session.requestId}${code === 'INPUT' ? '\n请检查用户ID/完整邮箱，以及本机是否已命名发布分组。' : ''}`);
+      return { status: 'settings-failed', code };
+    }
   }
 
   async handleP2P(event, openId, text, raw = text) {
@@ -528,6 +654,11 @@ class FeishuBotWorkflow {
     const quick = this.sessions.get(openId);
     if (quick && (quick.expiresAt <= this.now() || quick.groupId !== policy.groupId)) { this.discardSession(openId); return { status: 'no-session' }; }
     if (quick?.quick && quick.policy !== policy) { this.discardSession(openId); return { status: 'policy-changed' }; }
+    if (quick?.featureId === 'group-settings') {
+      if (quick.privateChatId && quick.privateChatId !== chatId) return { status: 'private-chat-mismatch' };
+      quick.privateChatId = chatId;
+      return this.handleGroupSettings(openId, quick, policy, raw.trim());
+    }
     if (quick?.featureId === 'register') {
       if (quick.privateChatId && quick.privateChatId !== chatId) return { status: 'private-chat-mismatch' };
       quick.privateChatId = chatId;
@@ -658,7 +789,7 @@ class FeishuBotWorkflow {
       await this.send('open_id', openId, '这条群申请已存在创建记录，不会再次创建或重发密钥。如未收到结果，请联系管理员核对本机记录。');
       return { status: 'already-recorded' };
     }
-    const actor = actorFromOpenId(openId);
+    const actor = await this.namedActor(openId,session.groupId);
     if (!actor) { this.discardSession(openId); return { status: 'invalid-identity' }; }
     const day = value => new Date(value + 8 * 3600_000).toISOString().slice(0, 10);
     const today = day(this.now());
@@ -683,7 +814,7 @@ class FeishuBotWorkflow {
       result = await this.service.create({ requestId: session.requestId, groupId: session.selectedGroup.id,
         quota: session.quota, name: '飞书令牌', operator: actor.name }, { verifiedActor: actor, feishuGroupId: session.groupId,
           quotaLimits: { maxQuota: policy.maxQuota, maxUserDailyQuota: policy.maxUserDailyQuota, maxGroupDailyQuota: policy.maxGroupDailyQuota },
-          guard: () => this.getPolicy() === policy && (!this.connection || this.connection.state?.().phase === 'connected') });
+          guard: () => this.getPolicy() === policy && this.sessions.get(openId)===session && session.expiresAt>this.now() && (!this.connection || this.connection.state?.().phase === 'connected') });
     } catch (error) {
       this.discardSession(openId);
       const diagnostic = failureDiagnostic(session.requestId, error?.createDiagnostic || error, error?.createDiagnostic?.stage);
@@ -701,6 +832,10 @@ class FeishuBotWorkflow {
     this.discardSession(openId);
     try { this.service.recordExternalDelivery(session.requestId, delivered ? 'sent' : 'unknown'); } catch { /* durable pending means never auto-resend */ }
     return { status: delivered ? 'created-and-delivered' : 'created-delivery-unknown' };
+  }
+  async namedActor(openId,groupId) {
+    const actor=actorFromOpenId(openId);if(!actor||!this.resolveActorName)return actor;
+    try {const name=await this.resolveActorName(openId,groupId);return name?{...actor,...name}:actor;}catch{return actor;}
   }
 }
 

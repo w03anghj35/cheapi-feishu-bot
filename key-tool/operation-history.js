@@ -11,7 +11,13 @@ function verifiedFeishuOperator(value) {
       typeof value.name !== 'string' || !/^飞书用户#[a-f0-9]{20}$/.test(value.name)) {
     invalid('飞书操作身份无效，已停止创建。');
   }
-  return { name: value.name, source: 'feishu-open-id', verified: true };
+  const actor={ name: value.name, source: 'feishu-open-id', verified: true };
+  if(value.displayName!==undefined){
+    if(typeof value.displayName!=='string'||!value.displayName.trim()||value.displayName.length>100||/[\x00-\x1f\x7f]/.test(value.displayName)||
+      value.nameSource!=='feishu-chat-members'||typeof value.nameFetchedAt!=='string'||!Number.isFinite(Date.parse(value.nameFetchedAt)))invalid('飞书姓名来源无效。');
+    Object.assign(actor,{displayName:value.displayName,nameSource:value.nameSource,nameFetchedAt:value.nameFetchedAt});
+  }
+  return actor;
 }
 function event(kind, state, code) {
   return { kind, state, at: new Date().toISOString(), ...(code ? { code } : {}) };
@@ -35,7 +41,7 @@ function query(records, input = {}) {
       typeof search !== 'string' || search.length > 200 || (status && !STATES.includes(status))) invalid('记录查询范围无效。');
   const q = search.trim().toLocaleLowerCase();
   // Do not decrypt credentials or receipts to search. Match recorded metadata only.
-  const rows = records.filter(r => (!status || r.state === status) && (!q || [r.requestId, r.owner, r.operator?.name,
+  const rows = records.filter(r => (!status || r.state === status) && (!q || [r.requestId, r.owner, r.operator?.name,r.operator?.displayName,
     r.body.name, r.body.quota, r.body.group_id, r.group?.originalName, r.group?.customerName, r.receipt?.id]
     .some(v => v != null && String(v).toLocaleLowerCase().includes(q))));
   rows.sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')) || b.requestId.localeCompare(a.requestId));

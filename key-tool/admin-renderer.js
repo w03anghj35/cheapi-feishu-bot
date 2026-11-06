@@ -111,12 +111,22 @@ function renderBot(next) {
     submission: '提交阶段（可能已发送，先核对）', 'receipt-storage': '保存创建回执', unknown: '阶段未知，先核对' };
   for (const row of [...failures.items].reverse()) {
     const li = document.createElement('li');
-    li.textContent = `${row.at} · ${row.code}${row.httpStatus ? ` / HTTP ${row.httpStatus}` : ''} · ${stages[row.stage] || stages.unknown} · 操作编号 ${row.requestId || '无效／未取得'}`;
+    const reasons={GROUP_UNAVAILABLE:'分组不可用',QUOTA_INVALID:'额度不符合要求',INSUFFICIENT_BALANCE:'管理员余额不足'};
+    li.textContent = `${row.at} · ${row.code}${row.httpStatus ? ` / HTTP ${row.httpStatus}` : ''}${reasons[row.reason] ? ` · ${reasons[row.reason]}` : ''} · ${stages[row.stage] || stages.unknown} · 操作编号 ${row.requestId || '无效／未取得'}`;
     $('bot-failures').append(li);
   }
   $('bot-connection').textContent = ({ connected: '已连接', connecting: '连接中', reconnecting: '重新连接中',
     unconfigured: '未配置 · 请在此处保存 Secret', 'storage-error': '存储异常 · 请保留文件检查', failed: '连接失败', 'stop-error': '旧连接未停止' })[c.phase] || '未连接';
-  if (c.error) botNotice(c.error.message, true);
+  const auto = next.autoReconnect;
+  const wait = auto?.nextRetryAt ? Math.max(0, Math.ceil((auto.nextRetryAt - Date.now()) / 1000)) : null;
+  const blocks = { credentials: '等待填写飞书凭据', storage: '存储异常，需保留文件并处理', stop: '旧连接未安全停止，需检查后重开',
+    auth: '等待平台管理员授权恢复', lease: '等待本机连接锁释放，不会抢占其他实例' };
+  $('bot-reconnect-status').textContent = !auto ? '此入口未启用后台自动连接。' : !auto.enabled ? '自动连接已暂停；点击“连接飞书”恢复。本次退出后重开会重新启用。' :
+    c.phase === 'connected' ? '自动连接守护已开启：意外断线后自动恢复，后台窗口隐藏时仍生效。' :
+      `${blocks[auto.reason] || '自动连接守护已开启'}${wait === null ? '' : ` · 约 ${wait} 秒后重试`}`;
+  if (c.error) botNotice(auto?.enabled && !['storage','stop'].includes(auto.reason)
+    ? `连接暂不可用（${c.error.code}），后台将自动重试。${blocks[auto.reason] || ''}` : c.error.message, true);
+  else if (auto?.enabled && c.phase === 'connected' && $('bot-notice').classList.contains('error')) botNotice('飞书连接已恢复，自动连接守护继续运行。');
   for (const id of ['bot-credentials-save','bot-app-id','bot-app-secret']) $(id).disabled = botBusy || authBusy || authState.phase !== 'ready' || c.active || c.storageError;
   $('bot-owner').textContent = next.ownerLabel || '未绑定'; $('bot-group').textContent = next.groupLabel || '未绑定';
   $('bot-enabled').textContent = next.enabled ? '已开启 · 全群成员可申请' : '已关闭';
@@ -133,7 +143,7 @@ function renderBot(next) {
     next.groupCandidate ? `待确认目标群 ID ${next.groupCandidate.groupId}；发起者 ${next.groupCandidate.label}` : '';
   $('bot-group-approve').hidden = !next.groupCandidate;
   $('bot-connect').disabled = botBusy || c.phase === 'connected' || c.phase === 'connecting';
-  $('bot-disconnect').disabled = botBusy || !c.active;
+  $('bot-disconnect').disabled = botBusy || (!c.active && !auto?.enabled);
   for (const id of ['bot-owner-start','bot-owner-approve','bot-group-start','bot-group-approve','bot-save']) $(id).disabled = botBusy || authBusy || authState.phase !== 'ready';
   $('bot-owner-start').disabled = botBusy || authBusy || authState.phase !== 'ready' || c.phase !== 'connected';
   $('bot-group-start').disabled = botBusy || authBusy || authState.phase !== 'ready' || c.phase !== 'connected' || !next.ownerBound;

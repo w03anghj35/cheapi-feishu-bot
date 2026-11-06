@@ -116,7 +116,7 @@ class KeyService {
     this.changed();
   }
   adminRecords(input) {
-    try { return history.query(this.records, input); } catch (e) { throw new ToolError('INPUT', e.message); }
+    try { return history.query(this.records.map(r=>this.decorateRecord?.(r)||r), input); } catch (e) { throw new ToolError('INPUT', e.message); }
   }
   findRecord(id) {
     const r = typeof id === 'string' && this.records.find(r => r.requestId === id);
@@ -124,7 +124,7 @@ class KeyService {
     return r;
   }
   adminRecord(id) {
-    const r = this.findRecord(id), detail = history.project(r);
+    const r = this.findRecord(id), detail = history.project(this.decorateRecord?.(r)||r);
     if (r.state === 'success' && r.result) {
       const value = this.store.open(r.result);
       detail.keyId = value.id; detail.maskedKey = history.mask(value.key);
@@ -223,7 +223,7 @@ class KeyService {
     const fingerprint = createHash('sha256').update(JSON.stringify({ owner, body })).digest('hex');
     const prior = this.records.find(r => r.requestId === input.requestId);
     if (prior) {
-      if (prior.operator && JSON.stringify(prior.operator) !== JSON.stringify(actor)) throw new ToolError('CONFLICT', '同一操作编号不能更换操作人。');
+      if (prior.operator && (prior.operator.name!==actor.name||prior.operator.source!==actor.source||prior.operator.verified!==actor.verified)) throw new ToolError('CONFLICT', '同一操作编号不能更换操作人。');
       if (prior.fingerprint !== fingerprint) throw new ToolError('CONFLICT', '同一操作编号不能更换参数。');
       if (prior.state !== 'success') throw new ToolError('UNKNOWN', '此操作已有记录，请先核对，不会再次发送。');
     }
