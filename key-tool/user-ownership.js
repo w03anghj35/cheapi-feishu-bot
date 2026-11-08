@@ -174,9 +174,40 @@ class UserOwnership {
     const scope = this.scope();
     if (!this.audit) return [];
     return this.audit.list(scope.owner, scope.groupId).map(row => ({
-      identity: fingerprint(row.openId), actorName: row.actorName, name: row.name, status: row.status,
+      identity: fingerprint(row.openId), actorName: row.actorName, name: row.name, kind: row.kind || 'balance', status: row.status,
       at: row.at, count: row.count
     }));
+  }
+  usageBinding(openId) {
+    if (this.storageFault) fail('STORAGE', '用户归属存储异常，本次不展示用量。');
+    if (!validOpenId(openId)) fail('INPUT', '飞书身份无效。');
+    const scope = this.scope();
+    const row = this.rows.find(item => item.owner === scope.owner && item.groupId === scope.groupId && item.openId === openId);
+    if (!row || !['assigned', 'linked'].includes(row.state)) return null;
+    const profile = row.state === 'linked' ? this.rows.find(item => item.owner === scope.owner &&
+      item.groupId === scope.groupId && item.state === 'profile' && nameKey(item.name) === nameKey(row.profileName)) : null;
+    if (row.state === 'linked' && !profile) fail('STORAGE', '绑定的姓名档案不存在，请保留原件。');
+    return { scope, name: profile?.name || row.name, actorName: row.name,
+      userIds: [...(profile || row).userIds] };
+  }
+  sameUsageBinding(openId, expected) {
+    if (!expected || !Array.isArray(expected.userIds)) return false;
+    const current = this.usageBinding(openId);
+    return !!current && current.scope.owner === expected.scope?.owner &&
+      current.scope.groupId === expected.scope?.groupId && current.name === expected.name &&
+      JSON.stringify(current.userIds) === JSON.stringify(expected.userIds);
+  }
+  auditUsage(openId, binding, status, count = 0) {
+    if (!validOpenId(openId) || !['found', 'not-found', 'error'].includes(status) ||
+        !Number.isSafeInteger(count) || count < 0 || count > 2000) fail('INPUT', '用量查询审计参数无效。');
+    if (!this.audit || this.storageFault) fail('STORAGE', '用量查询记录暂不可写入，本次不展示资料。');
+    const scope = binding?.scope || this.scope();
+    const current = this.rows.find(row => row.owner === scope.owner && row.groupId === scope.groupId && row.openId === openId);
+    const actorName = binding?.actorName || current?.name || `飞书用户#${fingerprint(openId).slice(0, 12)}`;
+    try {
+      this.audit.append({ ...scope, openId, actorName, name: binding?.name || '未绑定归属',
+        kind: 'usage', status, count, at: new Date().toISOString() });
+    } catch { this.storageFault = true; fail('STORAGE', '用量查询记录未安全保存，本次不展示资料；请保留原件。'); }
   }
   changeHistory() {
     const scope = this.scope();

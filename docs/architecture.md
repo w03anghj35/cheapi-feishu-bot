@@ -4,7 +4,8 @@
 
 - `group-settings-service.js`：管理员分组目录、精确用户定位、配置快照、独立修改账本、严格PUT与回读；`feishu-group-settings.js`：管理员分页倍率卡片与表单校验；`admin-group-settings.js`：独立别名发布与待核对记录入口。详见 [接口契约](group-settings.md)。
 - `user-ownership.js`：按平台管理员与飞书目标群隔离的姓名档案、成员登记及管理员确认的稳定身份→档案绑定，本机加密追加记录兼容旧身份归属，追加完整修改快照与时间；只读分页查询平台用户、按余额排序。`ownership-draft.js` 加密暂存未保存表单并按范围恢复，`ownership-query-audit.js` 加密记录每次已绑定成员查询，日志故障时拒绝展示资料。查询要求目标群 @进入、私聊点击功能，未绑定者仅得到自己的显示名与待核对提示；已绑定者一键查归属，不接受自报姓名作为权限。`admin-user-ownership.js` 为管理员姓名建档、身份核对与绑定入口。见 [用户归属说明](user-ownership.md)。
-- `daily-usage.js` 固定按用户 ID/北京时间自然日只读查询平台用户实付；`daily-usage-card.js` 生成为每归属人最近 3 天的纯文本分栏卡片，`daily-usage-store.js` 独立加密追加快照及群消息尝试/ID，`daily-usage-publisher.js` 在管理员显式启用后按约小时读取并更新同一群卡；结果不明停发，不自动重建消息。`admin-daily-usage.js` 为管理员预览/启用/暂停入口；`daily-usage-history.js` 与 `admin-usage-history.js` 为按月/周/归属人周表及管理员手动当前月已结束日期补采，补采只读平台、加密保存成功的整日并标来源，不直接发群。与原令牌和注册账本分离。见[每日用量说明](daily-usage.md)。
+- `daily-usage.js` 固定按用户 ID/北京时间自然日并发上限 2 路只读查询平台用户实付；`daily-usage-card.js` 生成为每归属人最近 3 天的纯文本分栏卡片，`daily-usage-store.js` 独立加密追加快照、群卡定时时刻、尝试/消息 ID。`daily-usage-publisher.js` 将本机约每小时历史采样与管理员设定的每日群卡发布分开；旧启用配置无定时时刻则不群发，结果不明停发。`member-usage-query.js` 为已绑定成员的本人实时私聊用量读取，历史仅用已固定快照；身份/归属在读数前后复核，加密查询审计区分余额与用量。`admin-daily-usage.js` 为管理员预览/设时/暂停入口；`daily-usage-history.js` 与 `admin-usage-history.js` 为历史周表与手动补采，`daily-usage-export.js` 从本机历史快照生成 Excel。群发布、私聊查询与原令牌/注册账本隔离。见[每日用量说明](daily-usage.md)。
+- `daily-usage-review.js` 为管理员主进程的单笔人工核对流程：默认取消的系统确认、前后两次管理员和群范围核验；`daily-usage-store.js` 以一个加密事件同时保存人工未见声明并关闭群发布。`admin-daily-usage.js` 只展示白名单脱敏失败分类和核对入口，旧记录不补造错误码；此流程不调用飞书发送 API。见[每日用量说明](daily-usage.md)。
 - `account-schedule.js`：管理员账号调度开关的一次性、双步骤本机计划；加密追加日志先记录尝试，再调用固定 `schedulable` 接口并回读。`admin-account-schedule.js` 为第九侧栏的账号列表、顺序和北京时间表单。见 [账号调度说明](account-schedule.md)。
 - `key-tool/main.js`：业务 Electron 主入口、平台授权、同源请求、IPC和飞书业务连接。
 - `admin.html/admin-renderer.js/admin-preload.js`：管理员分组、记录、飞书策略与绑定入口。
@@ -16,12 +17,14 @@
 - `feishu-features.js`：可维护功能菜单。新增业务应独立校验、账本、权限和回执，不复用其他业务额度字段。
 - `feishu-registration-card.js/feishu-registration-flow.js/feishu-request-cards.js`：原生卡片表单、无秘密确认页、原令牌卡片。
 - `feishu-connection.js/feishu-sdk.js`：飞书 SDK 长连接和受限私聊发送。
+- `feishu-lease-recovery.js/recover-feishu-lease.ps1`：Windows 连接锁恢复；仅确认旧 PID 不存在时，以独占文件句柄再次核验、完整备份和移除旧锁。仍由原 `wx` 独占创建获得新连接权；异常状态保持保护，业务账本不参与恢复。
 - `feishu-member-names.js`：只针对已绑定群的成员姓名分页缓存；新记录姓名快照与旧记录当前姓名投影、归属后台登记成员的当前群姓名投影，不改稳定身份或历史账本。归属投影按完整身份摘要对应，不按姓名或列表顺序猜测。权限与边界见[成员姓名](feishu-member-names.md)。
 - `feishu-reconnect.js`：业务主进程独立于界面的连接守护，自动首次连接、退避重试、手动暂停与迟到授权隔离；只替换已安全停止的SDK实例，不重试业务请求。见[自动连接说明](auto-reconnect.md)。
 - `feishu-main.js`：独立连接诊断入口，不承载正式注册/创建。
 - `platform-error.js`：将平台创建错误的有限字段映射为固定安全类别，供注册与令牌私聊提示使用；不透传原始响应。见[失败提示规则](platform-error-messages.md)。
 - `channel-monitor*.js`：五个固定来源的独立内置浏览器会话、成功后半小时串行调度、异常时每站2/5/10/15分钟退避复查、金额只读识别与本机名称配置；`channel-login-store.js`为每站管理员主动启用的自动登录分别保存 Windows 加密凭据，沿用 AeroRelay 原文件名以保留已有配置。管理页金额优先、登录设置默认收起；未登录/歧义明确显示，不自动重试已暂停的密码提交，安全边界见[渠道监控](channel-monitor.md)。
 - `channel-alert.js`：可选 QQ SMTP 低余额提醒和北京时间每日五站汇总；低余额只接受本次成功读取结果，五站各自按加密保存的阈值比较。每日汇总只用近一小时成功读数，缺失标未知。两类发送分别在独立加密状态中先记尝试、结果不明不自动重发；另有管理员显式测试邮件，不更改正式去重。管理端设置与状态由 `admin-channel-alert.js`、管理员 IPC 提供；不接触创建业务账本。
+- `channel-access.js`：本机加密的成员与渠道授权首版；只读查询按可信机器人账号与成员稳定标识过滤监控快照，拒绝未授权或过期读数。管理员界面 `admin-channel-access.js` 位于独立“渠道授权”栏，可配置、撤销及预览。尚无真实聊天身份绑定、CodexBridge/AI 接入或对外发送；不能把手工录入的身份视为已认证。见[渠道授权说明](channel-access.md)。
 - 渠道页面的入口、指标、组件定位和升级步骤维护在[页面定位台账](channel-workflows/README.md)，具体来源按站点分文件；代码仍以`CHANNELS`与提取函数为执行依据，文档不携带真实业务金额或凭据。
 
 ## 外部接口与失败策略

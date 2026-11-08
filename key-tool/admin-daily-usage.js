@@ -2,18 +2,86 @@
 (() => {
   const el = id => document.getElementById(id);
   const buttons = ['daily-usage-preview', 'daily-usage-enable', 'daily-usage-pause'].map(el);
+  const timeInput = el('daily-usage-time');
+  const validTime = value => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
   let busy = false, state = null, preview = null;
   const notice = value => { el('daily-usage-status').textContent = value; };
+  const beijingTime = value => new Date(value).toLocaleString('zh-CN',
+    { timeZone: 'Asia/Shanghai', hour12: false });
+  const failureNames = { local: '本机卡片预检未通过', api: '飞书 API 拒绝', http: 'HTTP 请求失败',
+    timeout: '网络或服务端超时', network: '网络连接失败', receipt: '回执缺少可确认的消息 ID',
+    unknown: '失败阶段未能确认' };
   function controls() {
     buttons[0].disabled = busy;
-    buttons[1].disabled = busy || state?.enabled === true || !preview?.rows?.length;
+    buttons[1].disabled = busy || !preview?.rows?.length || !validTime(timeInput.value);
     buttons[2].disabled = busy || state?.enabled !== true;
+    for (const button of el('daily-usage-reviews').querySelectorAll('button'))
+      button.disabled = busy || !button.parentElement.querySelector('input[type=checkbox]')?.checked;
+  }
+  function renderReviews(next) {
+    const root = el('daily-usage-reviews'); root.replaceChildren();
+    for (const card of (next.cards || []).filter(item => ['unknown', 'attempting', 'reviewed-absent'].includes(item.phase))) {
+      const section = document.createElement('section'); section.className = 'daily-usage-review';
+      const title = document.createElement('strong');
+      title.textContent = `${card.name} · ${card.phase === 'reviewed-absent' ? '人工记录未见' : '发送结果待核对'}`;
+      const detail = document.createElement('p');
+      detail.textContent = `目标群摘要 ${next.groupRef || '—'} · 首次尝试 ${beijingTime(card.attemptedAt || card.at)}（北京时间）。`;
+      section.append(title, detail);
+      if (card.failure) {
+        const diagnostic = document.createElement('p');
+        diagnostic.textContent = `脱敏诊断：${failureNames[card.failure.kind] || '未分类'}` +
+          (card.failure.httpStatus ? ` · HTTP ${card.failure.httpStatus}` : '') +
+          (card.failure.apiCode !== undefined ? ` · 飞书码 ${card.failure.apiCode}` : '') + '。';
+        section.append(diagnostic);
+      } else if (card.phase !== 'reviewed-absent') {
+        const diagnostic = document.createElement('p'); diagnostic.textContent = '这笔旧记录没有留存具体失败码。';
+        section.append(diagnostic);
+      }
+      if (card.phase === 'reviewed-absent') {
+        const note = document.createElement('p');
+        note.textContent = '已加密记录人工核对，群发布保持暂停。若要再次发布，须重新预览并明确确认。';
+        section.append(note);
+      } else if (card.action !== 'create') {
+        const note = document.createElement('p');
+        note.textContent = '这不是首次创建结果，不能按“未见卡片”解除；请单独核对原消息。';
+        section.append(note);
+      } else {
+        const label = document.createElement('label');
+        const checkbox = document.createElement('input'); checkbox.type = 'checkbox';
+        label.append(checkbox, document.createTextNode(' 我已在原绑定群按时间和归属姓名核对，确认没有这张卡片；理解以后重发可能重复公开邮箱与金额。'));
+        const button = document.createElement('button'); button.type = 'button';
+        button.textContent = '记录未见并暂停（不发送）'; button.disabled = true;
+        checkbox.addEventListener('change', () => { button.disabled = busy || !checkbox.checked; });
+        button.addEventListener('click', async () => {
+          if (busy || !checkbox.checked) return;
+          busy = true; controls(); notice('正在再次核对管理员、目标群和原发送记录；不会向群发消息。');
+          try {
+            const reply = await window.groupAdmin.dailyUsageReviewAbsent({ name: card.name, at: card.at, confirmed: true });
+            if (!reply.ok) throw Error(reply.message);
+            if (reply.data.cancelled) showState(reply.data.state, '已取消人工核对；原结果不明保护仍在。');
+            else {
+              preview = null; el('daily-usage-preview-rows').replaceChildren();
+              showState(reply.data.state, '已加密记录“原群未见卡片”并暂停发布；没有发送消息。请重新预览后再决定是否发布。');
+            }
+          } catch (error) {
+            const message = `核对未完成：${error.message}`;
+            await refresh(); notice(message);
+          }
+          finally { busy = false; controls(); }
+        });
+        section.append(label, button);
+      }
+      root.append(section);
+    }
   }
   function showState(next, message = '') {
     state = next;
+    if (timeInput.dataset.dirty !== 'true') timeInput.value = next.dailyTime || '';
+    renderReviews(next);
     const unknown = next.cards?.filter(card => ['unknown','attempting'].includes(card.phase)) || [];
-    notice(message || `${next.enabled ? '群表已启用' : '群表已暂停'} · 最近采样：${next.lastCheckedAt ?
-      new Date(next.lastCheckedAt).toLocaleString('zh-CN', { hour12: false }) : '尚无'} · ${unknown.length} 张卡片结果待核对。` +
+    notice(message || `${next.enabled && next.dailyTime ? `定时群表已启用 · 每日 ${next.dailyTime} 北京时间 · 最早 ${next.effectiveDay || '待确认'} 生效` :
+      next.enabled ? '旧版群表尚未设置每日时间，自动群发布已暂停' : '群表未启用'} · 本机历史按小时独立采样 · 最近采样：${next.lastCheckedAt ?
+      new Date(next.lastCheckedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '尚无'} · ${unknown.length} 张卡片结果待核对。` +
       (unknown.length ? ' 请先在目标群核对，系统不会重复创建结果不明的卡片。' : ''));
     controls();
   }
@@ -65,14 +133,16 @@
     finally { busy = false; controls(); }
   };
   buttons[1].onclick = async () => {
-    if (busy || !preview?.rows?.length || state?.enabled) return;
-    if (!confirm(`确认将 ${preview.rows.length} 个归属人的每日用量卡片发布到当前已绑定目标群？卡片逐账号显示邮箱与金额，全群可见；开启后今日约每小时更新同一张卡片。`)) return;
-    busy = true; controls(); notice('已确认启用，正在再次核对授权、用量和目标群；请勿重复点击。');
+    const selectedTime = timeInput.value;
+    if (busy || !preview?.rows?.length || !validTime(selectedTime)) return;
+    if (!confirm(`确认设定每天北京时间 ${selectedTime} 更新 ${preview.rows.length} 个归属人的每日用量群卡片？卡片逐账号显示邮箱与金额，全群可见。当前操作不立即发送；若今日所选时刻尚未到，今日起生效，否则次日起生效。错过时段不补发。`)) return;
+    busy = true; controls(); notice('正在再次核对授权、用量和目标群并保存每日时间；当前操作不立即发群。');
     try {
-      const reply = await window.groupAdmin.dailyUsageEnable();
+      const reply = await window.groupAdmin.dailyUsageEnable(selectedTime);
       if (!reply.ok) throw Error(reply.message);
-      showState(reply.data.state, reply.data.error ||
-        `已启用：本轮更新 ${reply.data.result.updated || 0} 张，结果待核对 ${reply.data.result.unknown || 0} 张。请到目标群核对实际卡片。`);
+      timeInput.dataset.dirty = 'false';
+      showState(reply.data.state,
+        `已设定北京时间每日 ${selectedTime} 更新群卡片，最早从 ${reply.data.state.effectiveDay} 生效；当前操作没有发群。到达设定时间后请到原目标群核对实际卡片。`);
     } catch (error) { notice(`启用失败：${error.message}`); await refresh(); }
     finally { busy = false; controls(); }
   };
@@ -90,5 +160,6 @@
     if (event.detail.view === 'user-ownership') void refresh();
     else { preview = null; el('daily-usage-preview-rows').replaceChildren(); controls(); }
   });
+  timeInput.addEventListener('input', () => { timeInput.dataset.dirty = 'true'; controls(); });
   controls();
 })();

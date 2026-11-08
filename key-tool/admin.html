@@ -14,6 +14,7 @@
 <button type="button" data-admin-target="user-ownership"><span>08</span>用户归属</button>
 <button type="button" data-admin-target="account-management"><span>09</span>账号管理</button>
 <button type="button" data-admin-target="usage-history"><span>10</span>用量统计</button>
+<button type="button" data-admin-target="channel-access"><span>11</span>渠道授权</button>
 </nav><p class="sidebar-note">配置按功能独立管理<br>切换栏目保留表单草稿</p></aside>
 <main id="main"><p class="eyebrow">CHEAPI / 管理工作台</p><h1 id="admin-view-title" tabindex="-1">管理配置</h1><p id="admin-view-description" class="subtitle">管理平台授权、飞书连接、管理员与目标群绑定。</p>
 <section class="auth-card" data-admin-view="configuration" aria-labelledby="auth-title"><div><p class="eyebrow">LOCAL / ENCRYPTED</p><h2 id="auth-title">管理员授权</h2><p id="auth-status" role="status" aria-live="polite">正在检查本机授权…</p><p id="auth-meta" class="muted"></p></div>
@@ -72,6 +73,20 @@
 <p id="channel-alert-status" role="status" aria-live="polite"></p></details>
 <details class="channel-monitor-help"><summary>监控与登录说明</summary><p class="hint">五个渠道分别显示金额，不混合相加。名称和加密自动登录在每张卡片的展开设置中，默认不保存密码；会话失效时每站最多自动尝试一次，失败暂停。验证码、二次验证和安全警告需您亲自处理。</p><p class="hint">前两个站点若显示网页自身的异常/返回页面，请您确认后自行处理；证书或浏览器安全警告不可绕过。金额未定位时旧值仅标为“上次结果”，不是当前余额。</p></details>
 </section>
+<section id="channel-access" class="history" data-admin-view="channel-access" hidden aria-labelledby="channel-access-title">
+<div class="section-title"><h2 id="channel-access-title">渠道授权 · 管理员专用</h2><button id="channel-access-refresh" type="button">刷新授权</button></div>
+<p class="hint">第一版只做本机权限配置与只读预览，尚未接入 CodexBridge、微信或 AI，也不会向外发送余额。以下两个标识目前须由管理员按可信来源核实后录入；尚无扫码绑定及身份验证流程，昵称和成员自报标识不能作为身份凭据。未分配默认无权查看。</p>
+<p id="channel-access-status" role="status" aria-live="polite">正在读取授权…</p>
+<form id="channel-access-form" class="channel-access-form">
+<label>显示名称<input id="channel-access-name" type="text" maxlength="60" autocomplete="off" placeholder="仅供管理员识别"></label>
+<label>机器人账号标识<input id="channel-access-bot" type="text" maxlength="256" autocomplete="off" placeholder="需从已核验入站事件取得"></label>
+<label>成员稳定标识<input id="channel-access-sender" type="text" maxlength="256" autocomplete="off" placeholder="不可填写昵称"></label>
+<fieldset><legend>允许查看的渠道</legend><div id="channel-access-options" class="channel-access-options"></div></fieldset>
+<button id="channel-access-save" class="dark" type="submit">加密保存授权</button>
+</form>
+<h3>已配置成员</h3><div id="channel-access-people"></div>
+<h3>只读预览</h3><p class="hint">预览仅使用本机已有监控快照；过期或失败的读数显示“未取得”，不触发网站刷新。预览不是微信发送测试。</p><div id="channel-access-preview" role="status" aria-live="polite">请选择一个已授权成员预览。</div>
+</section>
 <section id="user-ownership" class="history" data-admin-view="user-ownership" hidden aria-labelledby="user-ownership-title"><div class="section-title"><h2 id="user-ownership-title">用户归属</h2><button id="ownership-refresh" type="button">读取平台用户与查询申请</button></div>
 <p class="hint">先按归属姓名建立档案并勾选平台用户。成员从已绑定群 @机器人、在私聊点“用户查询”后，机器人会回显飞书显示名和身份摘要；管理员核对身份并明确绑定到姓名档案后，该成员再次点击“用户查询”即可直接查看自己的归属账号，无需输入姓名。显示名本身不是身份验证。</p>
 <p id="ownership-notice" role="status" aria-live="polite">请先读取平台用户与查询申请。</p>
@@ -89,13 +104,16 @@
 <details class="ownership-query-history"><summary>最近查询记录</summary><p class="hint">仅显示最近 100 条：已绑定身份摘要、归属档案姓名、时间、结果及用户数量；不保存查询时的余额快照。</p><div id="ownership-query-rows"></div></details></section>
 <section id="daily-usage" class="history" data-admin-view="user-ownership" hidden aria-labelledby="daily-usage-title">
 <h3 id="daily-usage-title">归属用户每日用量</h3>
-<p class="hint">每位归属人一张最近 3 天的滚动日表，逐账号显示邮箱与用户实付金额。仅发送到当前绑定目标群，该群全体成员都能看到。今日数据约每小时更新同一张卡片；跨日后补读上一日并固定。程序须保持运行。</p>
-<div class="channel-buttons"><button id="daily-usage-preview" type="button">预览今日用量</button><button id="daily-usage-enable" type="button">启用并首次发布到群</button><button id="daily-usage-pause" type="button">暂停群发布</button></div>
+<p class="hint">每位归属人一张最近 3 天的滚动日表，逐账号显示邮箱与用户实付金额。仅发送到当前绑定目标群，该群全体成员都能看到。群卡片只在管理员设定的北京时间每日时刻更新一次；本机历史仍约每小时只读采样。程序须保持运行，错过当天时刻不追发。</p>
+<label>每日群卡更新时间（北京时间）<input id="daily-usage-time" type="time" step="60" autocomplete="off"></label>
+<div class="channel-buttons"><button id="daily-usage-preview" type="button">预览今日用量</button><button id="daily-usage-enable" type="button">保存时间并启用定时群表</button><button id="daily-usage-pause" type="button">暂停群发布</button></div>
 <p id="daily-usage-status" role="status" aria-live="polite">每日用量群表默认关闭。</p>
+<div id="daily-usage-reviews" class="daily-usage-reviews" aria-live="polite"></div>
 <div id="daily-usage-preview-rows"></div>
 </section>
 <section id="usage-history" class="history" data-admin-view="usage-history" hidden aria-labelledby="usage-history-title">
 <div class="section-title"><h2 id="usage-history-title">归属用量 · 历史周表</h2><button id="usage-history-refresh" type="button">重新读取本机记录</button></div>
+<p id="usage-history-collection-status" role="status" aria-live="polite">正在核对本机自动采样状态…</p>
 <p class="hint">Excel 风格周表，不受群卡片最近 3 天限制。按北京时间周一至周日统计用户实付（USD）；没有采集的日期显示“未记录”，不是 0。今日显示“进行中”，周合计未完整时仅为已记录小计。手动补采仅查询本月已结束日期，并按当前归属回填，不代表当日历史归属；本页绝不发群。</p>
 <div class="channel-buttons"><button id="usage-history-backfill" type="button">补采本月已结束日期</button></div>
 <p id="usage-history-backfill-status" role="status" aria-live="polite">补采不会自动开始。读取量较大时可能需要数分钟；每次最多运行 10 分钟，未完成可再次点击续采。</p>
@@ -104,6 +122,13 @@
 <label>周<select id="usage-history-week" aria-label="选择周"></select></label>
 <label>所属人<select id="usage-history-person" aria-label="选择所属人"></select></label>
 </div>
+<div class="usage-history-export">
+<label>导出开始日期<input id="usage-history-export-start" type="date" min="2020-01-01" max="2100-12-31"></label>
+<label>导出结束日期<input id="usage-history-export-end" type="date" min="2020-01-01" max="2100-12-31"></label>
+<button id="usage-history-export-person" type="button">导出当前归属人</button>
+<button id="usage-history-export-all" type="button">导出全部归属人</button>
+</div>
+<p id="usage-history-export-status" role="status" aria-live="polite">按选定日期导出本机已有用量为 Excel 文件；默认当前周，未记录日期不会当作零。</p>
 <p id="usage-history-status" role="status" aria-live="polite">打开此栏目后读取本机历史记录。</p>
 <div id="usage-history-table" class="usage-history-table-wrap"></div>
 </section>
@@ -121,4 +146,4 @@
 <p class="hint">两步可填同一时分，仍会严格依次执行；第二步也可填次日或下个月。程序停机、休眠或授权失效超过执行时间 5 分钟后，该步记为错过，不会醒来补做。结果不明时暂停后续步骤，需人工核对。</p>
 <button id="account-schedule-create" class="dark" type="submit" disabled>保存并启用计划</button></form>
 <h3>已保存计划</h3><div id="account-schedule-plans"></div></section>
-<footer>仅本机管理入口<span>不是操作系统权限隔离；请勿向客户分发管理员会话。</span></footer></main><script src="admin-renderer.js"></script><script src="admin-history.js"></script><script src="admin-registration.js"></script><script src="admin-group-settings.js"></script><script src="admin-navigation.js"></script><script src="admin-operation-log-view.js"></script><script src="admin-channel-monitor.js"></script><script src="admin-channel-alert.js"></script><script src="admin-user-ownership.js"></script><script src="admin-daily-usage.js"></script><script src="admin-usage-history.js"></script><script src="admin-account-schedule.js"></script></body></html>
+<footer>仅本机管理入口<span>不是操作系统权限隔离；请勿向客户分发管理员会话。</span></footer></main><script src="admin-renderer.js"></script><script src="admin-history.js"></script><script src="admin-registration.js"></script><script src="admin-group-settings.js"></script><script src="admin-navigation.js"></script><script src="admin-operation-log-view.js"></script><script src="admin-channel-monitor.js"></script><script src="admin-channel-alert.js"></script><script src="admin-channel-access.js"></script><script src="admin-user-ownership.js"></script><script src="admin-daily-usage.js"></script><script src="admin-usage-history.js"></script><script src="admin-account-schedule.js"></script></body></html>

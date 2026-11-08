@@ -48,6 +48,20 @@ test('SDK creates and patches only bounded non-interactive group usage cards', a
   await assert.rejects(client.sendGroupCard({ chatId: 'oc_other', card }));
   assert.equal(calls.length, 2);
 });
+test('group message rejection exposes only numeric diagnostic fields', async () => {
+  let response = { code: 230027, msg: 'fictional private response' };
+  const client = createClient({ ...record, handlers: {}, onDiagnostic() {} }, { ...Lark,
+    WSClient: class { getConnectionStatus() { return { state: 'idle' }; } close() {} },
+    Client: class { im = { message: { create: async () => response } }; }
+  });
+  const card = { config: { enable_forward: false }, elements: [{ tag: 'div', text: { tag: 'plain_text', content: 'fixture' } }] };
+  await assert.rejects(client.sendGroupCard({ chatId: 'oc_fixture_12345678', card }), error =>
+    error.groupDeliveryKind === 'api' && error.feishuCode === 230027 &&
+    !error.message.includes('fictional private response'));
+  response = { code: 0, data: {} };
+  await assert.rejects(client.sendGroupCard({ chatId: 'oc_fixture_12345678', card }), error =>
+    error.groupDeliveryKind === 'receipt' && error.feishuCode === 0);
+});
 test('member-name adapter requests exact bound group open_id pages and sanitizes permission failures',async()=>{
   let response={code:0,data:{items:[],has_more:false}},calls=[];
   const client=createClient({...record,handlers:{},onDiagnostic(){}},{...Lark,

@@ -86,7 +86,7 @@ class FeishuConnection {
     if (!this.record) throw new ConnectionError('CONFIG', '请先填写并加密保存 App ID 和 App Secret。');
     if (this.phase === 'stop-error') throw new ConnectionError('STOP', '旧连接未正常停止，请关闭此窗口后重新打开。');
     if (this.client) return this.state();
-    try { this.lease?.acquire(); } catch { this.phase = 'failed'; this.error = { code: 'BUSY', message: '飞书连接已在另一窗口运行；请断开另一连接后重试。' }; throw new ConnectionError('BUSY', this.error.message); }
+    try { this.lease?.acquire(); } catch { this.phase = 'failed'; this.error = { code: 'BUSY', message: '本机连接锁正在使用或无法安全核验；已确认退出的旧进程会自动恢复，请勿重复保存凭据。' }; throw new ConnectionError('BUSY', this.error.message); }
     const generation = ++this.generation;
     this.phase = 'connecting'; this.error = null; this.connectedAt = null; this.lastEventAt = null;
     this.counts = { messages: 0, callbacks: 0, diagnostics: 0 };

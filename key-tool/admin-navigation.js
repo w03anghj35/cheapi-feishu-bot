@@ -8,9 +8,10 @@
     'registration-history': ['注册记录', '查询用户注册结果，处理需要人工核对的注册。'],
     'operation-log': ['操作日志', '按时间、阶段和错误编号检修本机管理操作。'],
     'channel-monitor': ['渠道监控', '每30分钟读取两项积分余额及三项剩余余额，登录状态保存在本机。'],
+    'channel-access': ['渠道授权', '预先配置聊天身份可查看的渠道，并预览只读结果。'],
     'user-ownership': ['用户归属', '把平台用户分配给核对过的飞书成员，供其在私聊查询当前余额。'],
     'account-management': ['账号管理', '为两个平台账号安排一次性调度开关，按明确顺序依次执行。'],
-    'usage-history': ['用量统计', '按月份、周与归属人查看本机已采集的逐账号用量和周合计。']
+    'usage-history': ['用量统计', '按月份、周与归属人查看本机已采集用量，或按日期导出 Excel。']
   };
   let current = 'configuration';
   const buttons = [...document.querySelectorAll('[data-admin-target]')];

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { ToolError } = require('./service');
-const { BrowserWindow, ipcMain, safeStorage } = require('electron');
+const { BrowserWindow, ipcMain, safeStorage, dialog } = require('electron');
 const { makeChannelLoginStore } = require('./channel-login-store');
 const { makeAlertStore } = require('./channel-alert');
 function makeFixture({ admin = false } = {}) {
@@ -55,7 +55,7 @@ function makeFixture({ admin = false } = {}) {
       throw new Error('unexpected request');
     } };
 }
-async function verifyUI({ app, ui, fixture, registrationService, tokenService, userOwnership, memberNames, accountSchedule, channelMonitor, openAdminWindow, openPlatformWindow, getPlatformWindow, apiSession, auth, request }) {
+async function verifyUI({ app, ui, fixture, registrationService, tokenService, userOwnership, memberNames, accountSchedule, channelMonitor, dailyUsagePublisher, openAdminWindow, openPlatformWindow, getPlatformWindow, apiSession, auth, request }) {
   const watchdog = setTimeout(() => { console.error('隔离界面测试超过45秒，未完成验收。'); app.exit(2); }, 45000);
   const run = text => ui.webContents.executeJavaScript(text);
   const delay = () => new Promise(r => setTimeout(r, 70));
@@ -108,8 +108,8 @@ async function verifyUI({ app, ui, fixture, registrationService, tokenService, u
       throw new Error('admin UI wait timeout: ' + expr + ' status: ' + status); };
     await adminWait('document.querySelectorAll("[data-group-id]").length===3 && !document.getElementById("admin-save").disabled');
     assert.equal(await adminRun('document.getElementById("admin-view-title").textContent'), '管理配置');
-    assert.equal(await adminRun('document.querySelectorAll("[data-admin-target]").length'), 10);
-    for (const view of ['configuration','token-groups','group-settings','token-history','registration-history','operation-log','channel-monitor','user-ownership','account-management','usage-history']) {
+    assert.equal(await adminRun('document.querySelectorAll("[data-admin-target]").length'), 11);
+    for (const view of ['configuration','token-groups','group-settings','token-history','registration-history','operation-log','channel-monitor','channel-access','user-ownership','account-management','usage-history']) {
       await navigate(view);
       assert.equal(await adminRun(`Array.from(document.querySelectorAll('[data-admin-view]')).every(p=>p.hidden===(p.dataset.adminView!=='${view}')&&p.inert===p.hidden)`), true);
       assert.equal(await adminRun('document.querySelectorAll("[data-admin-target][aria-current=page]").length'), 1);
@@ -128,12 +128,13 @@ async function verifyUI({ app, ui, fixture, registrationService, tokenService, u
       'admin-user-ownership-link',
       'admin-user-ownership-draft-state', 'admin-user-ownership-draft-save',
       'admin-daily-usage-state', 'admin-daily-usage-preview', 'admin-daily-usage-enable',
-      'admin-daily-usage-pause', 'admin-daily-usage-now',
-      'admin-daily-usage-history-catalog', 'admin-daily-usage-history-week',
+      'admin-daily-usage-pause', 'admin-daily-usage-now', 'admin-daily-usage-review-absent',
+      'admin-daily-usage-history-catalog', 'admin-daily-usage-history-week', 'admin-daily-usage-history-export',
       'admin-daily-usage-backfill-status', 'admin-daily-usage-backfill-current-month',
       'admin-account-schedule-snapshot', 'admin-account-schedule-state', 'admin-account-schedule-create',
       'admin-account-schedule-cancel', 'admin-account-schedule-reconcile',
       'admin-channel-monitor-state','admin-channel-monitor-rename','admin-channel-monitor-open','admin-channel-monitor-check',
+      'admin-channel-access-state','admin-channel-access-save','admin-channel-access-update','admin-channel-access-revoke','admin-channel-access-preview',
       'admin-channel-alert-state','admin-channel-alert-save','admin-channel-alert-pause','admin-channel-alert-clear','admin-channel-alert-test',
       'admin-channel-login-state','admin-channel-login-save','admin-channel-login-pause','admin-channel-login-clear']) {
       const denied = await ipcMain._invokeHandlers.get('key-tool:' + name)(customerEvent, { owner: 1, items: [] });
@@ -195,45 +196,108 @@ async function verifyUI({ app, ui, fixture, registrationService, tokenService, u
     await adminWait('document.getElementById("daily-usage-status").textContent.includes("已只读预览") || document.getElementById("daily-usage-status").textContent.includes("预览失败")');
     assert.match(await adminRun('document.getElementById("daily-usage-status").textContent'), /已只读预览/);
     assert.equal(await adminRun('document.getElementById("daily-usage-preview-rows").textContent.includes("alice@example.invalid")'), true);
-    await adminRun('document.getElementById("daily-usage-enable").click()');
-    await adminWait('document.getElementById("daily-usage-status").textContent.includes("已启用")');
-    assert.equal((await adminRun('window.groupAdmin.dailyUsageState()')).data.cards[0].phase, 'ready');
+    await adminRun('document.getElementById("daily-usage-time").value="10:00"; document.getElementById("daily-usage-time").dispatchEvent(new Event("input")); document.getElementById("daily-usage-enable").click()');
+    await adminWait('document.getElementById("daily-usage-status").textContent.includes("已设定")');
+    assert.equal((await adminRun('window.groupAdmin.dailyUsageState()')).data.dailyTime, '10:00');
+    assert.match((await adminRun('window.groupAdmin.dailyUsageState()')).data.effectiveDay, /^\d{4}-\d{2}-\d{2}$/);
+    assert.equal((await adminRun('window.groupAdmin.dailyUsageState()')).data.cards.length, 0);
+    // Saving the schedule no longer publishes or samples immediately; seed history through its separate read-only path.
+    assert.ok((await dailyUsagePublisher.historyTick()).saved.length > 0);
+    assert.equal((await adminRun('window.groupAdmin.dailyUsageState()')).data.cards.length, 0);
     await adminRun('document.getElementById("daily-usage-pause").click()');
     await adminWait('document.getElementById("daily-usage-status").textContent.includes("已暂停")');
+    const fakeAttempt = '2026-11-06T02:00:00Z', fakeUnknown = '2026-11-06T02:00:03Z';
+    const fakeProfile = '虚构未见归属', usageScope = userOwnership.scope();
+    dailyUsagePublisher.store.append({ type: 'attempt', scope: usageScope, profile: fakeProfile,
+      action: 'create', messageId: null, at: fakeAttempt, createdAt: fakeAttempt });
+    dailyUsagePublisher.store.append({ type: 'unknown', scope: usageScope, profile: fakeProfile,
+      messageId: null, at: fakeUnknown, createdAt: fakeAttempt });
+    await navigate('configuration'); await navigate('user-ownership');
+    await adminWait('document.querySelector(".daily-usage-review button") !== null');
+    assert.equal(await adminRun('document.querySelector(".daily-usage-review button").disabled'), true);
+    assert.equal(await adminRun('document.getElementById("daily-usage-reviews").textContent.includes("旧记录没有留存具体失败码")'), true);
+    const originalMessageBox = dialog.showMessageBox;
+    try {
+      dialog.showMessageBox = async () => ({ response: 0 });
+      await adminRun('document.querySelector(".daily-usage-review input[type=checkbox]").click();document.querySelector(".daily-usage-review button").click()');
+      await adminWait('document.getElementById("daily-usage-status").textContent.includes("已取消人工核对")');
+      assert.equal(dailyUsagePublisher.store.state(usageScope).cards[fakeProfile].phase, 'unknown');
+      dialog.showMessageBox = async () => ({ response: 1 });
+      await adminRun('document.querySelector(".daily-usage-review input[type=checkbox]").click();document.querySelector(".daily-usage-review button").click()');
+      await adminWait('document.getElementById("daily-usage-status").textContent.includes("已加密记录")');
+      assert.equal(dailyUsagePublisher.store.state(usageScope).cards[fakeProfile].phase, 'reviewed-absent');
+      assert.equal(dailyUsagePublisher.store.state(usageScope).enabled, false);
+      assert.equal(await adminRun('document.getElementById("daily-usage-enable").disabled'), true);
+    } finally { dialog.showMessageBox = originalMessageBox; }
     const historyCatalogReply = await adminRun('window.groupAdmin.dailyUsageHistoryCatalog()');
     assert.equal(historyCatalogReply.ok, true, JSON.stringify(historyCatalogReply));
     assert.equal(historyCatalogReply.data.names.includes('Alice归属'), true);
     await navigate('usage-history');
     await adminWait('document.getElementById("usage-history-status").textContent.includes("已读取")');
+    await adminWait('document.getElementById("usage-history-collection-status").textContent.includes("本机每小时采样")');
+    assert.match(await adminRun('document.getElementById("usage-history-collection-status").textContent'), /群卡片未启用，不影响本机采样/);
+    assert.equal(await adminRun('document.getElementById("usage-history-export-start").value.length'), 10);
+    assert.equal(await adminRun('document.getElementById("usage-history-export-end").value.length'), 10);
     assert.equal(await adminRun('document.querySelectorAll(".usage-history-table tbody tr").length'), 1);
+    // The previous navigation may have left an older "已读取" notice while the new week is still rendering.
+    await adminWait('document.getElementById("usage-history-table").textContent.includes("alice@example.invalid")');
     assert.equal(await adminRun('document.getElementById("usage-history-table").textContent.includes("alice@example.invalid")'), true);
     await adminRun('window.confirm=()=>true;document.getElementById("usage-history-backfill").click()');
     await adminWait('document.getElementById("usage-history-backfill-status").textContent.includes("完成") || document.getElementById("usage-history-backfill-status").textContent.includes("已停止") || document.getElementById("usage-history-backfill-status").textContent.includes("未开始")');
     assert.match(await adminRun('document.getElementById("usage-history-backfill-status").textContent'), /完成/);
     assert.equal((await adminRun('window.groupAdmin.dailyUsageBackfillStatus()')).data.completed > 0, true);
     assert.equal(await adminRun('document.getElementById("usage-history-table").textContent.includes("回填")'), true);
+    const exportPath = path.join(app.getPath('userData'), 'fixture-usage-export.xlsx');
+    const originalSaveDialog = dialog.showSaveDialog;
+    try {
+      dialog.showSaveDialog = async () => ({ canceled: false, filePath: exportPath });
+      await adminRun(`document.getElementById('usage-history-export-start').value='2026-11-01';
+        document.getElementById('usage-history-export-end').value='2026-11-02';
+        document.getElementById('usage-history-export-person').click()`);
+      await adminWait('document.getElementById("usage-history-export-status").textContent.includes("已导出")');
+      const exported = new (require('exceljs').Workbook)();
+      await exported.xlsx.readFile(exportPath);
+      assert.equal(exported.worksheets.length, 1);
+      assert.equal(exported.getWorksheet('用量明细').getCell('B2').value, 'Alice归属');
+      const allReply = await adminRun(`window.groupAdmin.dailyUsageHistoryExport({scope:'all',start:'2026-11-01',end:'2026-11-02'})`);
+      assert.equal(allReply.ok, true, JSON.stringify(allReply));
+      assert.equal(allReply.data.people, 1);
+      dialog.showSaveDialog = async () => ({ canceled: true });
+      const canceled = await adminRun(`window.groupAdmin.dailyUsageHistoryExport({scope:'all',start:'2026-11-01',end:'2026-11-02'})`);
+      assert.equal(canceled.data.canceled, true);
+    } finally { dialog.showSaveDialog = originalSaveDialog; fs.rmSync(exportPath, { force: true }); }
     admin.setSize(580, 820); await delay();
     assert.equal(await adminRun('document.documentElement.scrollWidth<=innerWidth'), true);
     assert.equal(await adminRun('document.querySelector(".usage-history-table-wrap").getBoundingClientRect().right<=innerWidth'), true);
-    const pinnedBefore = await adminRun(`(() => { const wrap=document.querySelector('.usage-history-table-wrap');
+    const pinnedBefore = await adminRun(`(() => { const wrap=document.querySelector('.usage-history-table-scroll');
+      const title=document.querySelector('.usage-history-table-title');
       const table=wrap.querySelector('table'); const first=table.querySelector('tbody th');
       const header=table.querySelector('thead th'); const footer=table.querySelector('tfoot th');
-      return {left:wrap.getBoundingClientRect().left,row:first.getBoundingClientRect().left,
+      return {left:wrap.getBoundingClientRect().left,title:title.getBoundingClientRect().left,
+        titleText:title.textContent,label:table.getAttribute('aria-labelledby'),titleId:title.id,
+        row:first.getBoundingClientRect().left,
         header:header.getBoundingClientRect().left,footer:footer.getBoundingClientRect().left,
         value:table.querySelector('tbody td').getBoundingClientRect().left,max:wrap.scrollWidth-wrap.clientWidth}; })()`);
     assert.ok(pinnedBefore.max > 100);
-    await adminRun("document.querySelector('.usage-history-table-wrap').scrollLeft=100;void 0"); await delay();
-    const pinnedAfter = await adminRun(`(() => { const wrap=document.querySelector('.usage-history-table-wrap');
+    assert.equal(pinnedBefore.label, pinnedBefore.titleId);
+    assert.match(pinnedBefore.titleText, /Alice归属/);
+    await adminRun("document.querySelector('.usage-history-table-scroll').scrollLeft=100;void 0"); await delay();
+    const pinnedAfter = await adminRun(`(() => { const wrap=document.querySelector('.usage-history-table-scroll');
       const table=wrap.querySelector('table'); return {scroll:wrap.scrollLeft,
+        title:document.querySelector('.usage-history-table-title').getBoundingClientRect().left,
         row:table.querySelector('tbody th').getBoundingClientRect().left,
         header:table.querySelector('thead th').getBoundingClientRect().left,
         footer:table.querySelector('tfoot th').getBoundingClientRect().left,
         value:table.querySelector('tbody td').getBoundingClientRect().left}; })()`);
     assert.ok(pinnedAfter.scroll >= 100);
-    for (const key of ['row','header','footer']) assert.ok(Math.abs(pinnedAfter[key]-pinnedBefore[key]) <= 1,
+    for (const key of ['title','row','header','footer']) assert.ok(Math.abs(pinnedAfter[key]-pinnedBefore[key]) <= 1,
       `${key} shifted during horizontal scroll`);
     assert.ok(pinnedAfter.value < pinnedBefore.value-90);
     fs.writeFileSync(path.join(__dirname, '..', 'outputs', 'usage-history-narrow-fixture.png'), (await admin.webContents.capturePage()).toPNG());
+    await adminRun("document.getElementById('usage-history-export-start').scrollIntoView();void 0"); await delay();
+    assert.equal(await adminRun(`[...document.querySelectorAll('.usage-history-export input,.usage-history-export button')]
+      .every(node=>node.getBoundingClientRect().right<=innerWidth)`), true);
+    fs.writeFileSync(path.join(__dirname, '..', 'outputs', 'usage-history-export-narrow-fixture.png'), (await admin.webContents.capturePage()).toPNG());
     admin.setSize(1040, 820);
     await navigate('user-ownership');
     await adminRun('document.getElementById("daily-usage-preview").click()');
@@ -362,6 +426,18 @@ async function verifyUI({ app, ui, fixture, registrationService, tokenService, u
     await navigate('configuration');
     await navigate('channel-monitor');
     await adminWait('document.querySelectorAll("[data-channel-id]").length===5');
+    await navigate('channel-access');
+    await adminWait('document.querySelectorAll("#channel-access-options input[type=checkbox]").length===5');
+    assert.equal((await adminRun('window.groupAdmin.channelAccessSave({name:"甲",botAccountId:"x",senderId:"member-a",channelIds:["points-ip"]})')).code, 'INPUT');
+    await adminRun(`document.getElementById('channel-access-name').value='模拟甲';
+      document.getElementById('channel-access-bot').value='fixture-bot';
+      document.getElementById('channel-access-sender').value='fixture-member-a';
+      document.querySelector('#channel-access-options input[type=checkbox]').click();
+      document.getElementById('channel-access-save').click()`);
+    await adminWait('document.getElementById("channel-access-status").textContent.includes("加密保存")');
+    assert.equal((await adminRun('window.groupAdmin.channelAccessState()')).data.people.some(row => row.name === '模拟甲'), true);
+    assert.equal((await adminRun('window.groupAdmin.channelAccessState()')).data.people.some(row => JSON.stringify(row).includes('fixture-member-a')), false);
+    await navigate('channel-monitor');
     assert.equal(await adminRun('document.querySelector(".channel-alert-settings").open'), false);
     assert.equal((await adminRun('window.groupAdmin.channelAlertState()')).data.enabled, false);
     assert.equal((await adminRun('window.groupAdmin.channelAlertSave({from:"wrong@example.invalid",authCode:"x",recipients:"a@example.invalid"})')).code, 'INPUT');
@@ -854,7 +930,7 @@ async function verifyUI({ app, ui, fixture, registrationService, tokenService, u
         'Feishu display-name-first token and registration records, name search and plain-text escaping',
         'save feedback next to button, slow pending operation, duplicate-name failure preserves draft, persistent-safe operation log and result filter',
         'reconnect countdown, manual pause and disconnect control while awaiting retry',
-        'ten sidebar destinations with one active view, hidden panels inert, drafts preserved and secrets cleared on navigation',
+        'eleven sidebar destinations with one active view, hidden panels inert, drafts preserved and secrets cleared on navigation',
         'historical usage week table filters by month, week and person, keeps missing days distinct from zero and fits narrow layout',
         'account management list, Beijing month-aware form, one-time plan save/cancel, narrow layout and no real switch POST',
         'real account schedulable adapter enforces fixed route, boolean body, same administrator role and live guard',

@@ -5,10 +5,10 @@ const { quotaUnits } = require('./service');
 const { failureDiagnostic, failureHint } = require('./create-diagnostics');
 const { publicFailure } = require('./platform-error');
 const { requestCard, PAGE_SIZE } = require('./feishu-request-cards');
-const { FEATURES, featureById, featureByText, isMenu, availableFeatures } = require('./feishu-features');
+const { featureById, featureByText, isMenu, availableFeatures } = require('./feishu-features');
 const groupSettingsFlow = require('./feishu-group-settings');
 const { registrationPrompt, advanceRegistration, registrationFormValues } = require('./feishu-registration-flow');
-const menuNumber = text => /^[1-9]\d{0,2}$/.test(text) && Number(text) <= FEATURES.length;
+const menuNumber = (text, count) => /^[1-9]\d{0,2}$/.test(text) && Number(text) <= count;
 const isRequest = text => /^\/?(?:创建令牌|申请令牌|发送令牌|领取令牌)$/.test(text);
 
 const CODE_TTL_MS = 5 * 60_000;
@@ -46,12 +46,13 @@ function actorFromOpenId(openId) {
 }
 
 class FeishuBotWorkflow {
-  constructor({ getPolicy, service, registrationService = null, groupSettingsService = null, userOwnership = null, resolveActorName = null, sendText, sendCard = null, connection = null, now = () => Date.now(), random = () => randomBytes(12).toString('base64url'), onCandidate = () => {} }) {
+  constructor({ getPolicy, service, registrationService = null, groupSettingsService = null, userOwnership = null, getMemberUsageQuery = () => null, resolveActorName = null, sendText, sendCard = null, connection = null, now = () => Date.now(), random = () => randomBytes(12).toString('base64url'), onCandidate = () => {} }) {
     this.getPolicy = getPolicy;
     this.service = service;
     this.registrationService = registrationService;
     this.groupSettingsService = groupSettingsService;
     this.userOwnership = userOwnership;
+    this.getMemberUsageQuery = getMemberUsageQuery;
     this.resolveActorName = resolveActorName;
     this.sendText = sendText;
     this.sendCard = sendCard;
@@ -70,6 +71,8 @@ class FeishuBotWorkflow {
     this.groupCandidate = null;
     this.lastCapacityNoticeAt = 0;
     this.tail = Promise.resolve();
+    this.memberUsageTask = null;
+    this.memberUsageGeneration = 0;
   }
 
   policy() {
@@ -155,7 +158,7 @@ class FeishuBotWorkflow {
     return session;
   }
 
-  reset() { this.codes.clear(); for (const openId of this.sessions.keys()) this.discardSession(openId); this.starts.clear(); this.ownerChallenge = null; this.ownerCandidate = null; this.groupChallenge = null; this.groupCandidate = null; }
+  reset() { this.memberUsageGeneration++; this.codes.clear(); for (const openId of this.sessions.keys()) this.discardSession(openId); this.starts.clear(); this.ownerChallenge = null; this.ownerCandidate = null; this.groupChallenge = null; this.groupCandidate = null; }
 
   handle(event) {
     const run = this.tail.then(() => this.handleMessage(event));
@@ -277,6 +280,7 @@ class FeishuBotWorkflow {
     const feature = featureById(featureId);
     if (!feature || session.state !== 'menu') return { status: 'invalid-feature' };
     if (feature.adminOnly && openId !== policy.ownerOpenId) return { status: 'admin-required' };
+    if (feature.id === 'user-usage') return this.startMemberUsage(openId, session, policy);
     if (feature.id === 'user-query') {
       if (!this.userOwnership || this.userOwnership.storageFault) {
         await this.send('open_id', openId, '用户查询暂不可用，请联系管理员检查本机归属配置。');
@@ -336,6 +340,42 @@ class FeishuBotWorkflow {
     Object.assign(session, { groups, page: 0, state: 'group', featureId: feature.id });
     await this.promptQuick(openId, session, policy);
     return { status: 'feature-selected', featureId: feature.id };
+  }
+
+  async startMemberUsage(openId, session, policy) {
+    const service = this.getMemberUsageQuery?.();
+    if (!service || !this.sendCard) {
+      await this.send('open_id', openId, '用户用量暂不可用，请联系管理员检查本机用量服务。');
+      this.discardSession(openId);
+      return { status: 'feature-unavailable', featureId: 'user-usage' };
+    }
+    if (this.memberUsageTask) {
+      await this.send('open_id', openId, '已有用户用量正在读取，请稍后从原群重新 @机器人查询。');
+      this.discardSession(openId);
+      return { status: 'user-usage-busy' };
+    }
+    const generation = this.memberUsageGeneration;
+    this.discardSession(openId);
+    const guard = () => this.memberUsageGeneration === generation && this.policy() === policy;
+    const run = (async () => {
+      try {
+        const result = await service.query(openId, guard);
+        if (!guard()) return;
+        if (result.pending) {
+          await this.send('open_id', openId, '尚未绑定您的归属档案。请先从原群 @机器人，选择“用户查询”登记身份，再由管理员在“用户归属”中核对绑定。');
+          return;
+        }
+        if (!service.sameBinding(openId, result.binding) || !guard()) return;
+        // An uncertain private send is not retried, since the card may already be visible.
+        try { await this.sendCard({ receiveIdType: 'open_id', receiveId: openId, card: result.card }); }
+        catch { /* Delivery may have succeeded despite a lost receipt. Never resend automatically. */ }
+      } catch {
+        if (guard()) await this.send('open_id', openId, '用户用量暂未能完整读取或安全记录，请稍后重新从原群发起；本次没有发布部分金额。');
+      }
+    })();
+    const task = run.catch(() => {}).finally(() => { if (this.memberUsageTask === task) this.memberUsageTask = null; });
+    this.memberUsageTask = task;
+    return { status: 'user-usage-started' };
   }
 
   async deliverUserQuery(openId, result, display) {
@@ -665,7 +705,7 @@ class FeishuBotWorkflow {
       if (raw === '取消') { this.discardSession(openId); await this.send('open_id', openId, '注册已取消，未创建账号。'); return { status: 'cancelled' }; }
       return this.handleRegistration(openId, quick, policy, raw);
     }
-    if (isMenu(text) || (quick?.state === 'menu' && (featureByText(text) || menuNumber(text)))) {
+    if (isMenu(text) || (quick?.state === 'menu' && (featureByText(text) || menuNumber(text, availableFeatures(quick.isAdmin).length)))) {
       if (!quick?.quick || quick.groupId !== policy.groupId || quick.expiresAt <= this.now()) {
         this.discardSession(openId);
         await this.send('open_id', openId, '请先在指定群 @机器人，再回到本私聊发送“菜单”。');
@@ -681,7 +721,7 @@ class FeishuBotWorkflow {
         const sent = await this.promptQuick(openId, quick, policy);
         return { status: sent ? 'menu-resumed' : 'private-prompt-failed' };
       }
-      const feature = featureByText(text) || FEATURES[Number(text) - 1];
+      const feature = featureByText(text) || availableFeatures(quick.isAdmin)[Number(text) - 1];
       return this.selectFeature(openId, quick, policy, feature.id);
     }
     if (isRequest(text) && typeof this.sendCard === 'function') {

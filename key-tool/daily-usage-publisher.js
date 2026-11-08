@@ -1,17 +1,40 @@
 'use strict';
+const { createHash } = require('node:crypto');
 const { beijingDay } = require('./daily-usage');
 const { dailyUsageCard, retiredDailyUsageCard } = require('./daily-usage-card');
 const { historyCatalog, historyWeek } = require('./daily-usage-history');
+const { exportRows } = require('./daily-usage-export');
+const { validScope, validDailyTime } = require('./daily-usage-store');
 
 const HOUR_MS = 60 * 60_000;
 const ROTATE_MS = 10 * 24 * HOUR_MS;
 const BACKFILL_BUDGET_MS = 10 * 60_000;
 const DAY_MS = 24 * HOUR_MS;
+const DAILY_WINDOW_MS = 15 * 60_000;
 const yesterday = day => new Date(Date.parse(`${day}T00:00:00Z`) - 24 * HOUR_MS).toISOString().slice(0, 10);
+const tomorrow = day => new Date(Date.parse(`${day}T00:00:00Z`) + DAY_MS).toISOString().slice(0, 10);
+const publishedToday = (card, day) => card?.phase === 'ready' && Number.isFinite(Date.parse(card.at)) &&
+  beijingDay(Date.parse(card.at)) === day;
+function dailyDueAt(day, dailyTime) {
+  if (!validDailyTime(dailyTime)) return null;
+  return Date.parse(`${day}T${dailyTime}:00+08:00`);
+}
+function groupFailure(error) {
+  const status = error?.response?.status;
+  const code = error?.feishuCode ?? error?.response?.data?.code;
+  const kind = ['local', 'api', 'http', 'timeout', 'network', 'receipt'].includes(error?.groupDeliveryKind) ?
+    error.groupDeliveryKind : Number.isSafeInteger(code) && code > 0 ? 'api' :
+      Number.isInteger(status) ? 'http' : ['ECONNABORTED', 'ETIMEDOUT'].includes(error?.code) ? 'timeout' :
+        ['ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ERR_NETWORK'].includes(error?.code) ? 'network' : 'unknown';
+  return { kind,
+    ...(Number.isInteger(status) && status >= 100 && status <= 599 ? { httpStatus: status } : {}),
+    ...(Number.isSafeInteger(code) && code >= 0 && code <= 999999999 ? { apiCode: code } : {}) };
+}
 class DailyUsagePublisher {
-  constructor({ usage, store, getScope, getClient, isReady, now = () => Date.now() }) {
-    Object.assign(this, { usage, store, getScope, getClient, isReady, now });
+  constructor({ usage, store, getScope, getClient, isReady, canCollect = () => true, now = () => Date.now() }) {
+    Object.assign(this, { usage, store, getScope, getClient, isReady, canCollect, now });
     this.busy = false; this.retryAfter = 0; store.load();
+    this.historyRetryAfter = 0; this.historyAttemptAt = null; this.historyFailure = null;
     this.backfill = { phase: 'idle', completed: 0, skipped: 0, total: 0, day: null };
   }
   scope() { const scope = this.getScope(); if (!scope) throw Error('平台管理员与目标群尚未就绪。'); return scope; }
@@ -23,10 +46,37 @@ class DailyUsagePublisher {
   }
   state() {
     const scope = this.scope(), state = this.store.state(scope);
-    return { enabled: state.enabled, days: state.days,
+    return { enabled: state.enabled, days: state.days, dailyTime: state.dailyTime,
+      effectiveDay: state.effectiveDay,
+      groupRef: createHash('sha256').update(scope.groupId).digest('hex').slice(0, 8),
+      collection: { available: this.canCollect(scope), attemptAt: this.historyAttemptAt,
+        busy: this.busy || this.usage.busy,
+        retryAfter: this.historyRetryAfter > this.now() ? new Date(this.historyRetryAfter).toISOString() : null,
+        failure: this.historyFailure },
       lastDay: Object.keys(state.snapshots).sort().at(-1) || null,
-      cards: Object.entries(state.cards).map(([name, card]) => ({ name, phase: card.phase, at: card.at })),
+      cards: Object.entries(state.cards).map(([name, card]) => ({ name, phase: card.phase,
+        action: card.action || null, at: card.at, attemptedAt: card.attemptedAt || card.at,
+        failure: card.failure || null })),
       lastCheckedAt: Object.values(state.snapshots).sort((a,b) => a.checkedAt.localeCompare(b.checkedAt)).at(-1)?.checkedAt || null };
+  }
+  reviewCandidate(input) {
+    if (this.busy || this.usage.busy) throw Error('已有每日用量任务，稍后再核对。');
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        Object.keys(input).sort().join(',') !== 'at,confirmed,name' || input.confirmed !== true ||
+        typeof input.name !== 'string' || typeof input.at !== 'string') throw Error('核对参数无效。');
+    const scope = this.scope();
+    const cards = this.store.state(scope).cards;
+    const card = Object.hasOwn(cards, input.name) ? cards[input.name] : null;
+    if (!card || !['unknown', 'attempting'].includes(card.phase) || card.action !== 'create' ||
+        card.messageId !== null || card.at !== input.at)
+      throw Error('这笔首次群卡片记录已变化或不能按未送达核对。');
+    return { scope, name: input.name, at: card.at, attemptedAt: card.attemptedAt || card.at };
+  }
+  reviewAbsent(input) {
+    const candidate = this.reviewCandidate(input);
+    this.store.append({ type: 'reviewed-absent', scope: candidate.scope, profile: candidate.name,
+      originalAt: candidate.at, at: new Date(this.now()).toISOString() });
+    return this.state();
   }
   historyCatalog() {
     const scope = this.scope();
@@ -37,6 +87,54 @@ class DailyUsagePublisher {
     const scope = this.scope();
     const names = this.usage.ownership?.profiles?.().map(row => row.name) || [];
     return historyWeek(this.store.state(scope), input || {}, beijingDay(this.now()), names);
+  }
+  historyExport(input) {
+    const scope = this.scope();
+    const names = this.usage.ownership?.profiles?.().map(row => row.name) || [];
+    return exportRows(this.store.state(scope), input, beijingDay(this.now()), names);
+  }
+  async historyTick() {
+    if (this.busy || this.usage.busy) return { skipped: 'busy' };
+    if (this.now() < Math.max(this.retryAfter, this.historyRetryAfter)) return { skipped: 'backoff' };
+    let scope;
+    try { scope = this.scope(); } catch { return { skipped: 'scope' }; }
+    if (!validScope(scope) || !this.canCollect(scope)) return { skipped: 'authorization' };
+    let profiles;
+    try { profiles = this.usage.ownership?.profiles?.(); }
+    catch { return { skipped: 'scope' }; }
+    if (!Array.isArray(profiles) || !profiles.some(row => row.userIds?.length)) return { skipped: 'no-users' };
+    const today = beijingDay(this.now()), previous = yesterday(today);
+    const state = this.store.state(scope);
+    const needsPrevious = !state.snapshots[previous]?.final;
+    const current = state.snapshots[today];
+    const needsToday = !current || this.now() - Date.parse(current.checkedAt) >= HOUR_MS;
+    if (!needsPrevious && !needsToday) return { skipped: 'not-due' };
+    this.busy = true;
+    this.historyAttemptAt = new Date(this.now()).toISOString();
+    let stage = 'yesterday';
+    const saved = [];
+    try {
+      for (const day of [needsPrevious ? previous : null, needsToday ? today : null].filter(Boolean)) {
+        stage = day === previous ? 'yesterday' : 'today';
+        const result = await this.usage.read(day);
+        const active = this.scope();
+        if (!this.canCollect(active) || active.owner !== scope.owner || active.groupId !== scope.groupId ||
+            result.scope.owner !== scope.owner || result.scope.groupId !== scope.groupId)
+          throw Error('scope changed');
+        this.store.append({ type: 'snapshot', scope, day, checkedAt: result.checkedAt,
+          final: result.final, ...(day === previous ? { source: 'backfill-current-ownership' } : {}),
+          rows: result.rows.map(row => ({ name: row.name,
+            users: row.users.map(user => ({ id: user.id, email: user.email, cost: user.cost })) })) });
+        saved.push(day);
+      }
+      this.historyFailure = null;
+      this.historyRetryAfter = 0;
+      return { saved };
+    } catch {
+      this.historyFailure = stage;
+      this.historyRetryAfter = this.now() + 15 * 60_000;
+      return { saved, failed: stage };
+    } finally { this.busy = false; }
   }
   backfillStatus() { return { ...this.backfill }; }
   async backfillCurrentMonth() {
@@ -81,14 +179,21 @@ class DailyUsagePublisher {
       return this.backfillStatus();
     } finally { this.busy = false; }
   }
-  setEnabled(enabled) {
+  setEnabled(enabled, dailyTime) {
     if (typeof enabled !== 'boolean') throw Error('开关参数无效。');
     const scope = this.scope();
     const existing = this.store.state(scope);
+    const selectedTime = dailyTime === undefined ? existing.dailyTime : dailyTime;
+    if (enabled && !validDailyTime(selectedTime)) throw Error('请先设置北京时间每日发送时间。');
+    if (dailyTime !== undefined && !validDailyTime(dailyTime)) throw Error('每日发送时间格式无效。');
     if (enabled && Object.values(existing.cards).some(card => ['unknown','attempting'].includes(card.phase)))
       throw Error('有群卡片发送结果待核对，不能重新启用或重复发送。');
     if (enabled && !this.isReady(scope)) throw Error('须先确认同一平台管理员、飞书已连接、目标群已绑定且群策略开启。');
-    this.store.append({ type: 'config', scope, enabled, days: 3 });
+    const today = beijingDay(this.now());
+    const effectiveDay = enabled ? this.now() < dailyDueAt(today, selectedTime) ? today : tomorrow(today) :
+      existing.effectiveDay;
+    this.store.append({ type: 'config', scope, enabled, days: 3, dailyTime: selectedTime,
+      effectiveDay });
     return this.state();
   }
   async preview() {
@@ -105,9 +210,42 @@ class DailyUsagePublisher {
     return { day: snapshot.day, checkedAt: snapshot.checkedAt, rows: snapshot.rows.filter(row => row.users.length).map(row => ({
       name: row.name, users: row.users.map(user => ({ email: user.email, cost: user.cost })) })) };
   }
+  async retireAbsentProfiles(scope, state, profiles) {
+    const names = new Set(profiles.filter(profile => profile.userIds?.length).map(profile => profile.name));
+    const stale = Object.entries(state.cards).filter(([name, card]) => card.phase === 'ready' && !names.has(name));
+    if (!stale.length) return null;
+    this.busy = true;
+    let updated = 0, unknown = 0;
+    try {
+      for (const [name, previous] of stale) {
+        if (!this.isReady(scope) || !this.store.state(scope).enabled ||
+            this.scope().owner !== scope.owner || this.scope().groupId !== scope.groupId ||
+            JSON.stringify(this.usage.ownership.profiles()) !== JSON.stringify(profiles))
+          return { skipped: 'scope-changed', updated };
+        const client = this.getClient();
+        if (!client) return { skipped: 'offline', updated };
+        const at = new Date(this.now()).toISOString();
+        this.store.append({ type: 'attempt', scope, profile: name, action: 'patch',
+          messageId: previous.messageId, at, createdAt: previous.createdAt });
+        try {
+          await client.patchGroupCard({ messageId: previous.messageId,
+            card: retiredDailyUsageCard(name, at) });
+          this.store.append({ type: 'retired', scope, profile: name, messageId: previous.messageId,
+            at: new Date(this.now()).toISOString(), createdAt: previous.createdAt });
+          updated++;
+        } catch (error) {
+          this.store.append({ type: 'unknown', scope, profile: name, messageId: previous.messageId,
+            at: new Date(this.now()).toISOString(), createdAt: previous.createdAt,
+            failure: groupFailure(error) });
+          unknown++;
+          break;
+        }
+      }
+      return { updated, unknown };
+    } finally { this.busy = false; }
+  }
   async tick() {
     if (this.busy) return { skipped: 'busy' };
-    if (this.now() < this.retryAfter) return { skipped: 'backoff' };
     let scope;
     try { scope = this.scope(); } catch { return { skipped: 'scope' }; }
     let state = this.store.state(scope);
@@ -115,27 +253,50 @@ class DailyUsagePublisher {
     const today = beijingDay(this.now());
     const unresolved = Object.values(state.cards).filter(card => ['unknown','attempting'].includes(card.phase));
     if (unresolved.length) return { skipped: 'message-result-unknown', count: unresolved.length };
-    if (state.snapshots[today] && this.now() - Date.parse(state.snapshots[today].checkedAt) < HOUR_MS)
-      return { skipped: 'not-due' };
+    let profiles;
+    try { profiles = this.usage.ownership?.profiles?.(); }
+    catch { return { skipped: 'ownership-unavailable' }; }
+    if (!Array.isArray(profiles) || profiles.some(profile => !profile ||
+        typeof profile.name !== 'string' || !Array.isArray(profile.userIds)))
+      return { skipped: 'ownership-unavailable' };
+    const retired = await this.retireAbsentProfiles(scope, state, profiles);
+    if (retired) return retired;
+    if (this.now() < this.retryAfter) return { skipped: 'backoff' };
+    const dueAt = dailyDueAt(today, state.dailyTime);
+    if (dueAt === null || !state.effectiveDay) return { skipped: 'daily-time-unset' };
+    if (today < state.effectiveDay) return { skipped: 'schedule-not-effective' };
+    const scheduledTime = state.dailyTime;
+    const scheduledEffectiveDay = state.effectiveDay;
+    if (this.now() < dueAt || this.now() >= dueAt + DAILY_WINDOW_MS)
+      return { skipped: 'outside-daily-window' };
+    const pendingCard = profiles.some(profile => profile.userIds?.length && !publishedToday(state.cards[profile.name], today));
+    if (!pendingCard) return { skipped: 'not-due' };
     this.busy = true;
     try {
       const previous = yesterday(today);
-      if (state.snapshots[previous] && !state.snapshots[previous].final) {
+      if (!state.snapshots[previous]?.final) {
         const final = await this.usage.read(previous);
         if (!this.isReady(scope) || !this.store.state(scope).enabled ||
+            this.store.state(scope).dailyTime !== scheduledTime ||
+            this.store.state(scope).effectiveDay !== scheduledEffectiveDay ||
             final.scope.owner !== scope.owner || final.scope.groupId !== scope.groupId) return { skipped: 'scope-changed' };
         this.store.append({ type: 'snapshot', scope, day: previous, checkedAt: final.checkedAt,
-          final: true, rows: final.rows.map(row => ({ name: row.name,
+          final: true, source: 'backfill-current-ownership', rows: final.rows.map(row => ({ name: row.name,
             users: row.users.map(user => ({ id: user.id, email: user.email, cost: user.cost })) })) });
       }
       const fresh = await this.usage.read(today);
       if (!this.isReady(scope) || !this.store.state(scope).enabled ||
+          this.store.state(scope).dailyTime !== scheduledTime ||
+          this.store.state(scope).effectiveDay !== scheduledEffectiveDay ||
           fresh.scope.owner !== scope.owner || fresh.scope.groupId !== scope.groupId) return { skipped: 'scope-changed' };
+      if (beijingDay(this.now()) !== today) return { skipped: 'day-changed' };
       this.store.append({ type: 'snapshot', scope, day: today, checkedAt: fresh.checkedAt,
         final: false, rows: fresh.rows.map(row => ({ name: row.name,
           users: row.users.map(user => ({ id: user.id, email: user.email, cost: user.cost })) })) });
       state = this.store.state(scope);
       if (!this.store.state(scope).enabled || !this.isReady(scope)) return { skipped: 'scope-changed' };
+      if (state.dailyTime !== scheduledTime || state.effectiveDay !== scheduledEffectiveDay)
+        return { skipped: 'schedule-changed' };
       const prepared = fresh.rows.filter(profile => profile.users.length).map(profile => {
         const cutoff = new Date(Date.parse(`${today}T00:00:00Z`) - 2 * 24 * HOUR_MS).toISOString().slice(0, 10);
         const days = Object.values(state.snapshots).filter(snapshot => snapshot.day >= cutoff &&
@@ -147,38 +308,23 @@ class DailyUsagePublisher {
           checkedAt: fresh.checkedAt }) };
       });
       let updated = 0, unknown = 0;
-      const currentNames = new Set(prepared.map(profile => profile.name));
-      for (const [name, previous] of Object.entries(state.cards)) {
-        if (currentNames.has(name) || previous.phase !== 'ready') continue;
-        if (!this.isReady(scope) || !this.store.state(scope).enabled) return { skipped: 'scope-changed', updated };
-        if (this.scope().owner !== scope.owner || this.scope().groupId !== scope.groupId ||
-            !this.sameOwnership(fresh)) return { skipped: 'ownership-changed', updated };
-        const card = retiredDailyUsageCard(name, fresh.checkedAt);
-        const client = this.getClient();
-        if (!client) return { skipped: 'offline', updated };
-        this.store.append({ type: 'attempt', scope, profile: name, action: 'patch',
-          messageId: previous.messageId, at: new Date(this.now()).toISOString(), createdAt: previous.createdAt });
-        try {
-          await client.patchGroupCard({ messageId: previous.messageId, card });
-          this.store.append({ type: 'retired', scope, profile: name, messageId: previous.messageId,
-            at: new Date(this.now()).toISOString(), createdAt: previous.createdAt });
-          updated++;
-        } catch {
-          this.store.append({ type: 'unknown', scope, profile: name, messageId: previous.messageId,
-            at: new Date(this.now()).toISOString(), createdAt: previous.createdAt });
-          unknown++;
-        }
-      }
       for (const profile of prepared) {
+        if (beijingDay(this.now()) !== today) return { skipped: 'day-changed', updated };
+        if (this.now() >= dueAt + DAILY_WINDOW_MS) return { skipped: 'daily-window-expired', updated };
         if (!this.isReady(scope) || !this.store.state(scope).enabled) return { skipped: 'scope-changed', updated };
+        if (this.store.state(scope).dailyTime !== scheduledTime ||
+            this.store.state(scope).effectiveDay !== scheduledEffectiveDay)
+          return { skipped: 'schedule-changed', updated };
         if (this.scope().owner !== scope.owner || this.scope().groupId !== scope.groupId ||
             !this.sameOwnership(fresh)) return { skipped: 'ownership-changed', updated };
         const cardState = state.cards[profile.name];
         if (['unknown','attempting'].includes(cardState?.phase)) { unknown++; break; }
+        if (publishedToday(cardState, today)) continue;
         const card = profile.card;
         const client = this.getClient();
         if (!client) return { skipped: 'offline', updated };
-        const rotate = !cardState || this.now() - Date.parse(cardState.createdAt) >= ROTATE_MS;
+        const rotate = !cardState || cardState.phase === 'reviewed-absent' ||
+          this.now() - Date.parse(cardState.createdAt) >= ROTATE_MS;
         const createdAt = rotate ? new Date(this.now()).toISOString() : cardState.createdAt;
         this.store.append({ type: 'attempt', scope, profile: profile.name,
           action: rotate ? 'create' : 'patch', messageId: rotate ? null : cardState.messageId,
@@ -190,10 +336,10 @@ class DailyUsagePublisher {
             messageId: rotate ? messageId : cardState.messageId,
             at: new Date(this.now()).toISOString(), createdAt });
           updated++;
-        } catch {
+        } catch (error) {
           this.store.append({ type: 'unknown', scope, profile: profile.name,
             messageId: rotate ? null : cardState.messageId,
-            at: new Date(this.now()).toISOString(), createdAt });
+            at: new Date(this.now()).toISOString(), createdAt, failure: groupFailure(error) });
           unknown++;
           break;
         }
@@ -210,4 +356,4 @@ class DailyUsagePublisher {
     return this.tick();
   }
 }
-module.exports = { DailyUsagePublisher, HOUR_MS, ROTATE_MS };
+module.exports = { DailyUsagePublisher, groupFailure, HOUR_MS, ROTATE_MS };

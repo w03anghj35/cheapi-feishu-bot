@@ -15,11 +15,12 @@ function validate(row) {
       typeof row.name !== 'string' || !row.name.trim() || row.name.length > 100 ||
       /[\x00-\x1f\x7f]/.test(row.name) ||
       !['found','not-found','error'].includes(row.status) ||
+      (row.kind !== undefined && !['balance','usage'].includes(row.kind)) ||
       !Number.isFinite(Date.parse(row.at)) ||
       !Number.isSafeInteger(row.count) || row.count < 0 || row.count > 2000)
     throw new Error('invalid query audit');
   return { owner: row.owner, groupId: row.groupId, openId: row.openId, actorName: row.actorName.trim(),
-    name: row.name.trim(), status: row.status, at: row.at, count: row.count };
+    name: row.name.trim(), kind: row.kind || 'balance', status: row.status, at: row.at, count: row.count };
 }
 function makeOwnershipQueryAudit(dir, safeStorage, io = fs) {
   const file = path.join(dir, 'query-audit.journal');

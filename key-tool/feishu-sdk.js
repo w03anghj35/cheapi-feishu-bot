@@ -1,6 +1,12 @@
 'use strict';
 const { randomUUID } = require('node:crypto');
 const { validateFormStructure } = require('./feishu-card-validation');
+function groupDeliveryError(kind, apiCode) {
+  const error = new Error('group card delivery result unknown');
+  error.groupDeliveryKind = kind;
+  if (Number.isSafeInteger(apiCode) && apiCode >= 0 && apiCode <= 999999999) error.feishuCode = apiCode;
+  return error;
+}
 function createClient(options, Lark = require('@larksuiteoapi/node-sdk')) {
   const ignore = () => {};
   // SDK failures may contain credentials, URL tickets or payloads. Never forward raw arguments.
@@ -51,24 +57,25 @@ function createClient(options, Lark = require('@larksuiteoapi/node-sdk')) {
       if (typeof chatId !== 'string' || !/^oc_[\w-]{8,128}$/.test(chatId) ||
           card?.config?.enable_forward !== false || !Array.isArray(card?.elements) ||
           card.elements.some(element => element?.tag === 'action' || element?.tag === 'form'))
-        throw new Error('invalid group usage card');
+        throw groupDeliveryError('local');
       const content = JSON.stringify(card);
-      if (Buffer.byteLength(content, 'utf8') > 28000) throw new Error('group card too large');
+      if (Buffer.byteLength(content, 'utf8') > 28000) throw groupDeliveryError('local');
       const response = await api.im.message.create({ params: { receive_id_type: 'chat_id' },
         data: { receive_id: chatId, msg_type: 'interactive', content, uuid: randomUUID() } });
       if (response?.code !== 0 || !/^om_[\w-]{4,252}$/.test(response?.data?.message_id || ''))
-        throw new Error('group card delivery result unknown');
+        throw groupDeliveryError(Number.isSafeInteger(response?.code) && response.code > 0 ? 'api' : 'receipt', response?.code);
       return response.data.message_id;
     },
     async patchGroupCard({ messageId, card }) {
       if (typeof messageId !== 'string' || !/^om_[\w-]{4,252}$/.test(messageId) ||
           card?.config?.enable_forward !== false || !Array.isArray(card?.elements) ||
           card.elements.some(element => element?.tag === 'action' || element?.tag === 'form'))
-        throw new Error('invalid group usage card');
+        throw groupDeliveryError('local');
       const content = JSON.stringify(card);
-      if (Buffer.byteLength(content, 'utf8') > 28000) throw new Error('group card too large');
+      if (Buffer.byteLength(content, 'utf8') > 28000) throw groupDeliveryError('local');
       const response = await api.im.v1.message.patch({ path: { message_id: messageId }, data: { content } });
-      if (response?.code !== 0) throw new Error('group card update result unknown');
+      if (response?.code !== 0)
+        throw groupDeliveryError(Number.isSafeInteger(response?.code) && response.code > 0 ? 'api' : 'receipt', response?.code);
       return messageId;
     }
   };

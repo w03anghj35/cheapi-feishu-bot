@@ -10,8 +10,11 @@ const { UserOwnership, makeOwnershipStore } = require('./user-ownership');
 const { makeOwnershipQueryAudit } = require('./ownership-query-audit');
 const { makeOwnershipDraftStore } = require('./ownership-draft');
 const { DailyUsage } = require('./daily-usage');
-const { makeDailyUsageStore } = require('./daily-usage-store');
+const { makeDailyUsageStore, validDailyTime } = require('./daily-usage-store');
 const { DailyUsagePublisher } = require('./daily-usage-publisher');
+const { MemberUsageQuery } = require('./member-usage-query');
+const { reviewAbsentAction } = require('./daily-usage-review');
+const { exportWorkbook } = require('./daily-usage-export');
 const { AccountSchedule, makeAccountScheduleStore } = require('./account-schedule');
 const { makeCatalogStore } = require('./group-catalog');
 const { makeSessionStore } = require('./session-store');
@@ -32,6 +35,7 @@ const { CHANNELS, makeNameStore, safeName } = require('./channel-monitor');
 const { createChannelHost } = require('./channel-monitor-host');
 const { ChannelMonitorController } = require('./channel-monitor-controller');
 const { ChannelAlert, makeAlertStore, validate: validateChannelAlert } = require('./channel-alert');
+const { makeChannelAccessStore } = require('./channel-access');
 const { makeChannelLoginStore, validate: validateChannelLogin } = require('./channel-login-store');
 const SITE = 'https://max.cheapi.cc';
 const dataDir = path.join(app.getPath('appData'), 'CheapiKeyStudio');
@@ -41,9 +45,9 @@ const adminLoginMode = process.argv.includes('--admin-login');
 const adminGroupsMode = process.argv.includes('--admin-groups');
 if (testMode) app.setPath('userData', path.join(__dirname, '..', '.runtime', 'key-tool-fixture'));
 if (!app.requestSingleInstanceLock()) app.exit(0);
-let ui, adminUI, login, loginReady, apiSession, service, auth, completingLogin, loginLoadFailed = false, copiedKey = '', closing = false, userOwnership, ownershipDraft, accountSchedule, dailyUsagePublisher;
+let ui, adminUI, login, loginReady, apiSession, service, auth, completingLogin, loginLoadFailed = false, copiedKey = '', closing = false, userOwnership, ownershipDraft, accountSchedule, dailyUsagePublisher, memberUsageQuery;
 let feishuConnection, feishuReconnect, feishuWorkflow, feishuPolicyStore, feishuPolicy = emptyPolicy(), feishuPolicyError = false;
-let failureLog, registrationService, groupSettingsService, adminOperationLog, memberNames, channelMonitor, channelHost, channelLoginStores, channelAlert;
+let failureLog, registrationService, groupSettingsService, adminOperationLog, memberNames, channelMonitor, channelHost, channelLoginStores, channelAlert, channelAccess;
 let recordTable,tableTimer,tablePreparationError=false;
 const recordTableDir=path.join(__dirname,'..','本机数据');
 function syncRecordTable(){
@@ -316,12 +320,25 @@ function makeFixtureChannelLoginStore(channelId) {
   };
 }
 function makeFixtureDailyUsageStore() {
-  let state = { enabled: false, days: 3, snapshots: {}, cards: {} };
+  let state = { enabled: false, days: 3, dailyTime: null, effectiveDay: null, snapshots: {}, cards: {} };
   return { load() {}, state() { return structuredClone(state); }, append(event) {
-    if (event.type === 'config') state.enabled = event.enabled;
+    if (event.type === 'config') { state.enabled = event.enabled; state.dailyTime = event.dailyTime ?? null;
+      state.effectiveDay = event.effectiveDay ?? null; }
     else if (event.type === 'snapshot') state.snapshots[event.day] = structuredClone(event);
     else if (event.type === 'attempt') state.cards[event.profile] = { phase: 'attempting', ...structuredClone(event) };
-    else if (event.type === 'ready' || event.type === 'unknown')
+    else if (event.type === 'unknown') {
+      const previous = state.cards[event.profile];
+      state.cards[event.profile] = { phase: 'unknown', ...structuredClone(event),
+        action: previous?.phase === 'attempting' ? previous.action : null,
+        attemptedAt: previous?.phase === 'attempting' ? previous.at : event.at };
+    } else if (event.type === 'reviewed-absent') {
+      const previous = state.cards[event.profile];
+      if (!previous || !['unknown', 'attempting'].includes(previous.phase) ||
+          previous.action !== 'create' || previous.messageId !== null || previous.at !== event.originalAt)
+        throw Error('fixture review invalid');
+      state.enabled = false;
+      state.cards[event.profile] = { ...previous, phase: 'reviewed-absent', at: event.at };
+    } else if (event.type === 'ready')
       state.cards[event.profile] = { phase: event.type, ...structuredClone(event) };
   } };
 }
@@ -339,6 +356,12 @@ function makeFixtureAlertStore() {
 }
 app.whenReady().then(async () => {
   adminOperationLog = makeAdminOperationLog(app.getPath('userData'), {memory:testMode});
+  try {
+    const accessDir = testMode ? path.join(app.getPath('userData'), 'channel-access-fixture') :
+      path.join(app.getPath('userData'), 'channel-monitor');
+    channelAccess = makeChannelAccessStore(accessDir, safeStorage);
+    channelAccess.load();
+  } catch { channelAccess = null; } // A damaged grant log fails closed without affecting monitoring.
   try {
     channelAlert = new ChannelAlert({ store: testMode ? makeFixtureAlertStore() :
       makeAlertStore(path.join(app.getPath('userData'), 'channel-monitor'), safeStorage),
@@ -436,6 +459,7 @@ app.whenReady().then(async () => {
   if(registrationService)registrationService.decorateRecord=record=>memberNames.decorate(record);
   service.onCreateFailure = row => { failureLog.append(row); publishFeishuState(); };
   feishuWorkflow = new FeishuBotWorkflow({ getPolicy: () => feishuPolicy, service, registrationService, groupSettingsService, userOwnership, connection: feishuConnection,
+    getMemberUsageQuery: () => memberUsageQuery,
     resolveActorName:(openId,groupId)=>memberNames.actor(openId,groupId),
     sendText: message => {
       if (!feishuConnection?.client || typeof feishuConnection.client.sendText !== 'function') throw new Error('connection unavailable');
@@ -452,11 +476,17 @@ app.whenReady().then(async () => {
         makeDailyUsageStore(path.join(app.getPath('userData'), 'daily-usage'), safeStorage),
       getScope: () => testMode ? userOwnership.scope() :
         ({ owner: feishuPolicy.platformOwnerId, groupId: feishuPolicy.groupId }),
+      canCollect: scope => testMode || (auth?.phase === 'ready' && service.owner === scope.owner &&
+        feishuPolicy.platformOwnerId === scope.owner && feishuPolicy.groupId === scope.groupId),
       getClient: () => testMode ? { sendGroupCard: async () => 'om_fixture_usage_card', patchGroupCard: async ({ messageId }) => messageId } : feishuConnection?.client,
       isReady: scope => testMode || (!!feishuWorkflow?.policy() && auth?.phase === 'ready' &&
         service.owner === scope.owner && feishuPolicy.groupId === scope.groupId)
     });
   } catch { dailyUsagePublisher = null; } // A damaged daily usage log cannot affect registration or tokens.
+  if (dailyUsagePublisher) try {
+    memberUsageQuery = new MemberUsageQuery({ ownership: userOwnership,
+      request: testMode ? fixture.request : request, snapshotStore: dailyUsagePublisher.store });
+  } catch { memberUsageQuery = null; } // Private query failure cannot affect group publishing.
   setInterval(() => feishuWorkflow.pruneTransientState(), 30000).unref();
   if (!testMode) feishuReconnect = new FeishuReconnect({ connection: feishuConnection, ensureReady: async () => {
     if (closing) throw new ToolError('STOP', '程序正在退出。');
@@ -479,6 +509,33 @@ app.whenReady().then(async () => {
   register('admin-channel-monitor-state', () => {
     if (!channelMonitor) throw new ToolError('STORAGE', '渠道监控名称配置无法安全读取，请保留原文件检查。');
     return channelMonitor.state();
+  }, true);
+  const accessStore = () => {
+    if (!channelAccess) throw new ToolError('STORAGE', '渠道授权不可用，请保留原文件检查。');
+    return channelAccess;
+  };
+  register('admin-channel-access-state', () => ({ ...accessStore().state(),
+    channels: CHANNELS.map(channel => ({ id: channel.id, name: channel.defaultName, metric: channel.metric })) }), true);
+  register('admin-channel-access-save', input => {
+    try { return accessStore().grant(input); }
+    catch (error) { throw new ToolError(error?.code === 'INPUT' ? 'INPUT' : 'STORAGE',
+      error?.code === 'INPUT' ? error.message : '渠道授权未安全保存，请保留原件检查。'); }
+  }, true);
+  register('admin-channel-access-revoke', id => {
+    try { return accessStore().revoke(id); }
+    catch (error) { throw new ToolError(error?.code === 'INPUT' ? 'INPUT' : 'STORAGE',
+      error?.code === 'INPUT' ? error.message : '渠道授权未安全撤销，请保留原件检查。'); }
+  }, true);
+  register('admin-channel-access-update', ({ id, channelIds } = {}) => {
+    try { return accessStore().update(id, channelIds); }
+    catch (error) { throw new ToolError(error?.code === 'INPUT' ? 'INPUT' : 'STORAGE',
+      error?.code === 'INPUT' ? error.message : '渠道授权未安全更新，请保留原件检查。'); }
+  }, true);
+  register('admin-channel-access-preview', id => {
+    if (!channelMonitor) throw new ToolError('STORAGE', '渠道监控不可用。');
+    try { return accessStore().previewCurrent(id, () => channelMonitor.state()); }
+    catch (error) { throw new ToolError(error?.code === 'DENIED' ? 'DENIED' : 'STORAGE',
+      error?.code === 'DENIED' ? error.message : '授权预览无法读取。'); }
   }, true);
   register('admin-channel-monitor-rename', ({ id, name } = {}) => {
     if (!channelMonitor) throw new ToolError('STORAGE', '渠道监控名称配置不可用。');
@@ -600,29 +657,69 @@ app.whenReady().then(async () => {
     if (!dailyUsagePublisher) throw new ToolError('STORAGE', '每日用量发布账本不可安全读取，请保留原件。');
     return dailyUsagePublisher;
   };
+  const usageHistory = () => {
+    const publisher = usagePublisher();
+    const scope = publisher.scope();
+    if (scope.owner !== currentPlatformOwner() || scope.owner !== auth.state().owner)
+      throw new ToolError('POLICY', '当前管理员与历史记录归属不一致，请重新核对授权和目标群。');
+    return publisher;
+  };
   register('admin-daily-usage-state', () => usagePublisher().state(), true);
   register('admin-daily-usage-preview', async () => usagePublisher().preview(), true);
-  register('admin-daily-usage-enable', async () => {
+  register('admin-daily-usage-enable', async dailyTime => {
     await assertFeishuAdmin();
+    if (!validDailyTime(dailyTime)) throw new ToolError('INPUT', '请填写有效的北京时间每日时分。');
     const preview = await usagePublisher().preview();
     if (!preview.rows.length || preview.rows.every(row => !row.users.length))
       throw new ToolError('INPUT', '没有可发布的归属账号，请先建立并核对姓名档案。');
-    usagePublisher().setEnabled(true);
-    try { return { state: usagePublisher().state(), result: await usagePublisher().tick() }; }
-    catch { return { state: usagePublisher().state(), error: '已启用，但首次读取或发布未完成；请查看状态，不要重复点击。' }; }
+    return { state: usagePublisher().setEnabled(true, dailyTime), scheduled: true };
   }, true);
   register('admin-daily-usage-pause', () => usagePublisher().setEnabled(false), true);
+  register('admin-daily-usage-review-absent', input => reviewAbsentAction(input, {
+    assertAdmin: assertFeishuAdmin, currentPublisher: usageHistory,
+    confirm: options => dialog.showMessageBox(adminUI, options)
+  }), true);
   register('admin-daily-usage-now', async () => {
     await assertFeishuAdmin();
     return usagePublisher().publishNow();
   }, true);
   register('admin-daily-usage-history-catalog', async () => {
     await assertFeishuAdmin();
-    return usagePublisher().historyCatalog();
+    return usageHistory().historyCatalog();
   }, true);
   register('admin-daily-usage-history-week', async input => {
     await assertFeishuAdmin();
-    return usagePublisher().historyWeek(input);
+    return usageHistory().historyWeek(input);
+  }, true);
+  register('admin-daily-usage-history-export', async input => {
+    await assertFeishuAdmin();
+    const data = usageHistory().historyExport(input);
+    const filename = `归属用量-${input.scope === 'all' ? '全部' : '单人'}-${data.start}-${data.end}.xlsx`;
+    const chosen = await dialog.showSaveDialog(adminUI, {
+      title: '导出本机历史用量', defaultPath: filename,
+      filters: [{ name: 'Excel 工作簿', extensions: ['xlsx'] }]
+    });
+    if (chosen.canceled || !chosen.filePath) return { canceled: true };
+    if (path.extname(chosen.filePath).toLowerCase() !== '.xlsx')
+      throw new ToolError('INPUT', '请选择 .xlsx 文件名。');
+    await assertFeishuAdmin();
+    const fresh = usageHistory().historyExport(input);
+    const bytes = Buffer.from(await exportWorkbook(fresh));
+    const fs = require('node:fs/promises');
+    const temporary = path.join(path.dirname(chosen.filePath), `.${path.basename(chosen.filePath)}.${require('node:crypto').randomUUID()}.tmp`);
+    let handle;
+    try {
+      handle = await fs.open(temporary, 'wx', 0o600);
+      await handle.writeFile(bytes); await handle.sync(); await handle.close(); handle = null;
+      await fs.rename(temporary, chosen.filePath);
+    } catch {
+      throw new ToolError('STORAGE', 'Excel 未能安全保存；原有文件已保留，请检查目标目录和文件占用。');
+    } finally {
+      if (handle) await handle.close().catch(() => {});
+      await fs.unlink(temporary).catch(() => {});
+    }
+    return { canceled: false, fileName: path.basename(chosen.filePath), rows: fresh.rows.length,
+      people: fresh.people, days: fresh.count };
   }, true);
   register('admin-daily-usage-backfill-status', async () => {
     await assertFeishuAdmin();
@@ -749,9 +846,15 @@ app.whenReady().then(async () => {
     if (!closing) void channelAlert.dailyTick(channelMonitor.state()).catch(() => {});
   }, 60000).unref();
   if (!testMode && accountSchedule) setInterval(() => { if (!closing) void accountSchedule.tick().catch(() => {}); }, 10000).unref();
-  if (!testMode && dailyUsagePublisher) setInterval(() => {
-    if (!closing) void dailyUsagePublisher.tick().catch(() => {});
-  }, 60000).unref();
+  if (!testMode && dailyUsagePublisher) {
+    const usageDue = async () => {
+      if (closing) return;
+      await dailyUsagePublisher.tick().catch(() => {});
+      if (!closing) await dailyUsagePublisher.historyTick().catch(() => {});
+    };
+    void usageDue();
+    setInterval(() => { void usageDue(); }, 60000).unref();
+  }
   if(!testMode){
     const prepared=require('./prepare-record-directory').prepareRecordDirectory(path.resolve(__dirname,'..'));
     if(prepared){recordTable=makeRecordTable(recordTableDir);groupSettingsService&&(groupSettingsService.onRecordsChanged=publishRecords);syncRecordTable();setInterval(syncRecordTable,60000).unref();}
@@ -763,7 +866,7 @@ app.whenReady().then(async () => {
     if (service.refreshing) await service.refreshing.catch(() => {});
     await beginAuthorization().catch(reportLoginError);
   }
-  if (testMode) await require('./test-fixture').verifyUI({ app, ui, fixture, registrationService, tokenService:service, userOwnership, memberNames, accountSchedule, channelMonitor,
+  if (testMode) await require('./test-fixture').verifyUI({ app, ui, fixture, registrationService, tokenService:service, userOwnership, memberNames, accountSchedule, channelMonitor, dailyUsagePublisher,
     openAdminWindow: createAdmin, openPlatformWindow: createLogin, getPlatformWindow: () => login, apiSession, auth, request });
 }).catch(error => {
   if (testMode) console.error('fixture startup failed:', error?.stack || error?.message || 'unknown');

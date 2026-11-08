@@ -2,8 +2,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { recoverStaleLease } = require('./feishu-lease-recovery');
 
-function makeConnectionLease(file, io = fs, pid = process.pid) {
+function makeConnectionLease(file, io = fs, pid = process.pid, recover = recoverStaleLease) {
   let token = null;
   const error = () => new Error('飞书连接正在其他窗口运行，或本机连接锁需要管理员检查。');
   function acquire() {
@@ -30,8 +31,9 @@ function makeConnectionLease(file, io = fs, pid = process.pid) {
       let current;
       try { current = JSON.parse(io.readFileSync(file, 'utf8')); } catch { throw error(); }
       if (!Number.isSafeInteger(current?.pid) || current.pid <= 0 || typeof current.token !== 'string' || !/^[0-9a-f-]{36}$/.test(current.token)) throw error();
-      // Never reclaim a stale-looking lock automatically. PID reuse, partial exits,
-      // and filesystem races make automatic deletion unsafe for a live socket.
+      // Recovery is opt-in for the real filesystem only and requires a native
+      // exclusive handle plus a second PID check. Age alone is never evidence.
+      if (io === fs && recover(file) === true) continue;
       throw error();
     }
     throw error();

@@ -10,12 +10,30 @@ const validScope = value => Number.isSafeInteger(value?.owner) && value.owner > 
 const validName = value => typeof value === 'string' && value.trim() === value &&
   value.length >= 1 && value.length <= 100 && !/[\x00-\x1f\x7f]/.test(value);
 const validMessage = value => typeof value === 'string' && /^om_[\w-]{4,252}$/.test(value);
+const validDailyTime = value => typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
+const FAILURE_KINDS = new Set(['local', 'api', 'http', 'timeout', 'network', 'receipt', 'unknown']);
+function validateFailure(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).some(key => !['kind', 'httpStatus', 'apiCode'].includes(key)) ||
+      !FAILURE_KINDS.has(value.kind) ||
+      (value.httpStatus !== undefined && (!Number.isInteger(value.httpStatus) || value.httpStatus < 100 || value.httpStatus > 599)) ||
+      (value.apiCode !== undefined && (!Number.isSafeInteger(value.apiCode) || value.apiCode < 0 || value.apiCode > 999999999)))
+    throw Error('daily usage failure diagnostic invalid');
+  return { kind: value.kind,
+    ...(value.httpStatus === undefined ? {} : { httpStatus: value.httpStatus }),
+    ...(value.apiCode === undefined ? {} : { apiCode: value.apiCode }) };
+}
 function validateEvent(event) {
-  if (!event || !validScope(event.scope) || !['config','snapshot','attempt','ready','unknown','retired'].includes(event.type))
+  if (!event || !validScope(event.scope) || !['config','snapshot','attempt','ready','unknown','retired','reviewed-absent'].includes(event.type))
     throw Error('daily usage event invalid');
   if (event.type === 'config') {
-    if (typeof event.enabled !== 'boolean' || event.days !== 3) throw Error('daily usage config invalid');
-    return { type: 'config', scope: event.scope, enabled: event.enabled, days: 3 };
+    if (typeof event.enabled !== 'boolean' || event.days !== 3 ||
+        (event.dailyTime !== undefined && event.dailyTime !== null && !validDailyTime(event.dailyTime)) ||
+        (event.effectiveDay !== undefined && event.effectiveDay !== null &&
+          (typeof event.effectiveDay !== 'string' || dayKey(event.effectiveDay) !== event.effectiveDay)))
+      throw Error('daily usage config invalid');
+    return { type: 'config', scope: event.scope, enabled: event.enabled, days: 3,
+      dailyTime: event.dailyTime ?? null, effectiveDay: event.effectiveDay ?? null };
   }
   if (event.type === 'snapshot') {
     dayKey(event.day);
@@ -43,6 +61,12 @@ function validateEvent(event) {
   }
   if (!validName(event.profile) || !Number.isFinite(Date.parse(event.at)))
     throw Error('daily usage card state invalid');
+  if (event.type === 'reviewed-absent') {
+    if (typeof event.originalAt !== 'string' || !Number.isFinite(Date.parse(event.originalAt)))
+      throw Error('daily usage review target invalid');
+    return { type: event.type, scope: event.scope, profile: event.profile,
+      originalAt: event.originalAt, at: event.at };
+  }
   if (event.createdAt !== undefined && !Number.isFinite(Date.parse(event.createdAt)))
     throw Error('daily usage card creation time invalid');
   if (event.type === 'attempt') {
@@ -57,7 +81,8 @@ function validateEvent(event) {
   if (event.type === 'unknown' && event.messageId !== null && !validMessage(event.messageId))
     throw Error('daily usage unknown state invalid');
   return { type: event.type, scope: event.scope, profile: event.profile,
-    messageId: event.messageId, at: event.at, createdAt: event.createdAt || event.at };
+    messageId: event.messageId, at: event.at, createdAt: event.createdAt || event.at,
+    ...(event.type === 'unknown' && event.failure !== undefined ? { failure: validateFailure(event.failure) } : {}) };
 }
 function makeDailyUsageStore(dir, safeStorage, io = fs) {
   const file = path.join(dir, 'daily-usage.journal');
@@ -71,8 +96,9 @@ function makeDailyUsageStore(dir, safeStorage, io = fs) {
   const key = scope => `${scope.owner}:${scope.groupId}`;
   function apply(event) {
     const id = key(event.scope);
-    const state = states.get(id) || { enabled: false, days: 3, snapshots: {}, cards: {} };
-    if (event.type === 'config') { state.enabled = event.enabled; state.days = event.days; }
+    const state = states.get(id) || { enabled: false, days: 3, dailyTime: null, effectiveDay: null, snapshots: {}, cards: {} };
+    if (event.type === 'config') { state.enabled = event.enabled; state.days = event.days;
+      state.dailyTime = event.dailyTime; state.effectiveDay = event.effectiveDay; }
     else if (event.type === 'snapshot') state.snapshots[event.day] = event;
     else if (event.type === 'attempt') state.cards[event.profile] = { phase: 'attempting',
       action: event.action, messageId: event.messageId, at: event.at, createdAt: event.createdAt };
@@ -80,8 +106,22 @@ function makeDailyUsageStore(dir, safeStorage, io = fs) {
       at: event.at, createdAt: event.createdAt };
     else if (event.type === 'retired') state.cards[event.profile] = { phase: 'retired', messageId: event.messageId,
       at: event.at, createdAt: event.createdAt };
-    else if (event.type === 'unknown') state.cards[event.profile] = { phase: 'unknown', messageId: event.messageId,
-      at: event.at, createdAt: event.createdAt };
+    else if (event.type === 'unknown') {
+      const previous = state.cards[event.profile];
+      state.cards[event.profile] = { phase: 'unknown', action: previous?.phase === 'attempting' ? previous.action : null,
+        messageId: event.messageId, at: event.at, attemptedAt: previous?.phase === 'attempting' ? previous.at : event.at,
+        createdAt: event.createdAt, failure: event.failure || null };
+    } else if (event.type === 'reviewed-absent') {
+      const previous = state.cards[event.profile];
+      if (!previous || !['unknown', 'attempting'].includes(previous.phase) ||
+          previous.action !== 'create' || previous.messageId !== null || previous.at !== event.originalAt)
+        throw failure();
+      // One durable event both records the human attestation and stops the timer.
+      state.enabled = false;
+      state.cards[event.profile] = { phase: 'reviewed-absent', action: 'create', messageId: null,
+        at: event.at, attemptedAt: previous.attemptedAt || previous.at,
+        createdAt: previous.createdAt, failure: previous.failure || null };
+    }
     states.set(id, state);
   }
   return {
@@ -126,8 +166,8 @@ function makeDailyUsageStore(dir, safeStorage, io = fs) {
     },
     state(scope) {
       if (!loaded || fault || !validScope(scope)) throw failure();
-      return structuredClone(states.get(key(scope)) || { enabled: false, days: 3, snapshots: {}, cards: {} });
+      return structuredClone(states.get(key(scope)) || { enabled: false, days: 3, dailyTime: null, effectiveDay: null, snapshots: {}, cards: {} });
     }
   };
 }
-module.exports = { makeDailyUsageStore, validateEvent, validScope, MAX_BYTES };
+module.exports = { makeDailyUsageStore, validateEvent, validScope, validDailyTime, MAX_BYTES };

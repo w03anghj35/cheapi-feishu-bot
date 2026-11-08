@@ -74,8 +74,10 @@
     if (!queries.length) { root.textContent = '暂无查询记录。'; return; }
     for (const row of queries) {
       const line = document.createElement('p');
-      const outcome = { found: `查到 ${row.count} 个用户`, 'not-found': '姓名未找到', error: '查询失败' }[row.status] || '状态未知';
-      line.textContent = `${new Date(row.at).toLocaleString('zh-CN', { hour12: false })} · ${row.actorName}（身份 ${row.identity.slice(0, 12)}）· 查询 ${row.name} · ${outcome}`;
+      const outcome = row.kind === 'usage' ?
+        ({ found: `已读取 ${row.count} 个账号（不代表私聊送达）`, 'not-found': '身份未绑定', error: '读取失败' }[row.status] || '状态未知') :
+        ({ found: `查到 ${row.count} 个用户`, 'not-found': '姓名未找到', error: '查询失败' }[row.status] || '状态未知');
+      line.textContent = `${new Date(row.at).toLocaleString('zh-CN', { hour12: false })} · ${row.actorName}（身份 ${row.identity.slice(0, 12)}）· ${row.kind === 'usage' ? '用量查询' : '余额查询'} ${row.name} · ${outcome}`;
       root.append(line);
     }
   }

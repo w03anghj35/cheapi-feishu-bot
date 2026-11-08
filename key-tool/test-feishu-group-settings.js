@@ -39,10 +39,13 @@ async function setup(count=2) {
 }
 test('admin menu includes settings; ordinary users cannot see, type or forge it',async()=>{
   const f=await setup();await f.start(OTHER);
-  assert.deepEqual(nodes(f.cards.at(-1).card).filter(n=>n.value?.action==='feature').map(n=>n.value.featureId),['register','token','user-query']);
+  assert.deepEqual(nodes(f.cards.at(-1).card).filter(n=>n.value?.action==='feature').map(n=>n.value.featureId),['register','token','user-query','user-usage']);
   assert.equal((await f.dm('分组设置',OTHER)).status,'admin-required');
   const forged=f.event('feature',{featureId:'group-settings'},OTHER);assert.equal(f.workflow.handleCard(forged).toast.type,'warning');
-  await f.start(OWNER);assert.ok(JSON.stringify(f.cards.at(-1)).includes('分组设置'));assert.equal(f.puts.length,0);
+  await f.start(OWNER);
+  assert.deepEqual(nodes(f.cards.at(-1).card).filter(n=>n.value?.action==='feature').map(n=>n.value.featureId),
+    ['register','token','group-settings','user-query','user-usage']);
+  assert.equal(f.puts.length,0);
 });
 test('admin target, paged forms, confirmation and duplicate click write once; no success before readback',async()=>{
   const f=await setup(6);await f.start();await f.click('feature',{featureId:'group-settings'});await f.account({account:'8'});

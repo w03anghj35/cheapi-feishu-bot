@@ -24,12 +24,22 @@ test('query audit is encrypted, append-only and survives reopen', t => {
   assert.equal(raw.includes(ACTOR) || raw.includes('陈梦'), false);
   const reopened = makeOwnershipQueryAudit(f.dir, safeStorage); reopened.load();
   assert.equal(reopened.list(1, GROUP).length, 1);
+  assert.equal(reopened.list(1, GROUP)[0].kind, 'balance', 'older audit rows remain balance queries');
   assert.equal(reopened.list(2, GROUP).length, 0);
   reopened.append({ owner: 1, groupId: GROUP, openId: ACTOR, actorName: '登记人', name: '不存在',
     status: 'not-found', count: 0, at: new Date().toISOString() });
   assert.deepEqual(reopened.list(1, GROUP).map(row => row.status), ['not-found', 'found']);
   fs.appendFileSync(path.join(f.dir, 'query-audit.journal'), 'partial');
   assert.throws(() => makeOwnershipQueryAudit(f.dir, safeStorage).load());
+});
+test('usage query audit is encrypted and distinguished from balance queries', t => {
+  const f = fixture(t); f.audit.load();
+  f.audit.append({ owner: 1, groupId: GROUP, openId: ACTOR, actorName: '登记人', name: '陈梦',
+    kind: 'usage', status: 'found', count: 2, at: new Date().toISOString() });
+  const raw = fs.readFileSync(path.join(f.dir, 'query-audit.journal'), 'utf8');
+  assert.equal(raw.includes(ACTOR) || raw.includes('陈梦') || raw.includes('usage'), false);
+  const reopened = makeOwnershipQueryAudit(f.dir, safeStorage); reopened.load();
+  assert.equal(reopened.list(1, GROUP)[0].kind, 'usage');
 });
 test('query result is withheld when audit append fails', async t => {
   const f = fixture(t); f.audit.load();

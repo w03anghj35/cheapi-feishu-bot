@@ -62,12 +62,12 @@ async function setup() {
     setPolicy: v => { policy = { ...policy, ...v }; }, advance: ms => { now += ms; }, setPhase: v => { phase = v; },
     failCard: v => { failCard = v; }, failDM: v => { failDM = v; }, failPost: v => { failPost = v; } };
 }
-test('pure mention opens two-feature private menu; no fake third button, no group secrets', async () => {
+test('pure mention opens exact ordinary-member private menu without admin-only setting or group secrets', async () => {
   const f = await setup(); assert.equal((await f.start()).status, 'menu-started');
   const card = f.cards[0]; assert.equal(card.receiveIdType, 'open_id'); assert.equal(card.receiveId, USER);
   assert.equal(card.card.config.enable_forward, false);
   const buttons = card.card.elements.flatMap(x => x.actions || []).filter(x => x.value.action === 'feature');
-  assert.deepEqual(buttons.map(x => x.value.featureId), ['register', 'token', 'user-query']);
+  assert.deepEqual(buttons.map(x => x.value.featureId), ['register', 'token', 'user-query', 'user-usage']);
   assert.equal(f.posts.length, 0); assert.equal(f.workflow.codes.size, 0);
 });
 for (const balance of ['0','1','5','10']) test(`private registration balance ${balance}: exact password, one explicit POST, no password echo`, async () => {

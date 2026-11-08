@@ -36,8 +36,10 @@ function snapshotStamp(value) {
 }
 class DailyUsage {
   constructor({ ownership, request, now = () => Date.now(), maxProfiles = MAX_PROFILES,
-    maxUsers = MAX_USERS, maxDurationMs = 120_000, throttle = async () => {} }) {
-    Object.assign(this, { ownership, request, now, maxProfiles, maxUsers, maxDurationMs, throttle });
+    maxUsers = MAX_USERS, maxDurationMs = 120_000, maxConcurrent = 2, throttle = async () => {} }) {
+    if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 3)
+      throw new Error('每日用量并发上限无效。');
+    Object.assign(this, { ownership, request, now, maxProfiles, maxUsers, maxDurationMs, maxConcurrent, throttle });
     this.busy = false;
   }
   async read(day, field = 'total_actual_cost') {
@@ -57,13 +59,33 @@ class DailyUsage {
       const byId = new Map(users.filter(user => user.role === 'user').map(user => [user.id, user]));
       if (ids.some(id => !byId.has(id))) throw new Error('有归属用户已不在当前平台列表，本次不发布用量。');
       const costs = new Map();
-      for (const id of ids) {
-        if (this.now() - startedAt >= this.maxDurationMs)
-          throw new Error('每日用量读取超过本次时间上限，未发布不完整结果。');
-        const stats = await this.request('GET', statsRoute(id, date));
-        costs.set(id, finiteCost(stats, field));
-        await this.throttle();
-      }
+      let nextIndex = 0, started = 0, failure = null, launchGate = Promise.resolve();
+      const timedOut = () => this.now() - startedAt >= this.maxDurationMs;
+      const waitLaunch = () => {
+        const turn = launchGate.then(async () => {
+          if (failure) return;
+          if (started > 0) await this.throttle();
+          if (timedOut()) throw new Error('每日用量读取超过本次时间上限，未发布不完整结果。');
+          started++;
+        });
+        launchGate = turn.catch(error => { failure ||= error || new Error('每日用量读取失败。'); });
+        return turn;
+      };
+      const worker = async () => {
+        try {
+          while (!failure && nextIndex < ids.length) {
+            const index = nextIndex++;
+            if (timedOut()) throw new Error('每日用量读取超过本次时间上限，未发布不完整结果。');
+            // Space out request starts even when two slow platform reads overlap.
+            await waitLaunch();
+            if (failure) return;
+            const stats = await this.request('GET', statsRoute(ids[index], date));
+            costs.set(ids[index], finiteCost(stats, field));
+          }
+        } catch (error) { failure ||= error || new Error('每日用量读取失败。'); }
+      };
+      await Promise.all(Array.from({ length: Math.min(this.maxConcurrent, ids.length) }, () => worker()));
+      if (failure) throw failure;
       if (this.now() - startedAt >= this.maxDurationMs)
         throw new Error('每日用量读取超过本次时间上限，未发布不完整结果。');
       const verified = await this.ownership.admin();

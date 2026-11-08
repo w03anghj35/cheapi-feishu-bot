@@ -5,6 +5,7 @@
   "main": "main.js",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.76.0",
+    "exceljs": "4.4.0",
     "nodemailer": "7.0.13"
   }
 }

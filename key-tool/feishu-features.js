@@ -7,7 +7,8 @@ const FEATURES = Object.freeze([
   Object.freeze({ id: 'register', label: '用户注册', aliases: Object.freeze(['用户注册', '注册账号', '创建账号']) }),
   Object.freeze({ id: 'token', label: '令牌创建', aliases: Object.freeze(['令牌创建', '创建令牌', '申请令牌', '发送令牌', '领取令牌']) }),
   Object.freeze({ id: 'group-settings', label: '分组设置', adminOnly: true, aliases: Object.freeze(['分组设置', '设置倍率']) }),
-  Object.freeze({ id: 'user-query', label: '用户查询', aliases: Object.freeze(['用户查询', '查询用户', '我的用户']) })
+  Object.freeze({ id: 'user-query', label: '用户查询', aliases: Object.freeze(['用户查询', '查询用户', '我的用户']) }),
+  Object.freeze({ id: 'user-usage', label: '用户用量', aliases: Object.freeze(['用户用量', '我的用量', '查询用量']) })
 ]);
 
 function featureById(id) { return FEATURES.find(feature => feature.id === id) || null; }

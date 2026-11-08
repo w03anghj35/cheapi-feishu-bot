@@ -4,9 +4,9 @@ const { dayKey, finiteCost } = require('./daily-usage');
 const MAX_CARD_BYTES = 28_000;
 const clean = value => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').trim();
 const cost = value => `$${finiteCost({ total_actual_cost: value }).toFixed(4)}`;
-function dailyUsageCard({ name, days, checkedAt, windows = 3 }) {
+function dailyUsageCard({ name, days, checkedAt, windows = 3, privateView = false }) {
   if (typeof name !== 'string' || !name.trim() || name.length > 100 ||
-      !Array.isArray(days) || !days.length || ![3, 7].includes(windows) ||
+      !Array.isArray(days) || !days.length || ![3, 7].includes(windows) || typeof privateView !== 'boolean' ||
       !Number.isFinite(Date.parse(checkedAt))) throw new Error('用量表输入不完整。');
   const ordered = [...days].sort((a, b) => a.day.localeCompare(b.day)).slice(-windows);
   const ids = new Set();
@@ -48,9 +48,10 @@ function dailyUsageCard({ name, days, checkedAt, windows = 3 }) {
   }
   elements.push(row(['合计', ...total.map((amount, i) =>
     [...users.keys()].every(id => ordered[i].users.some(user => user.id === id)) ? cost(amount) : '—')]));
-  elements.push(div('“—”表示该日未记录完整账号，不代表用量为 0。仅发送到已绑定目标群；群成员均可看到邮箱与金额。'));
+  elements.push(div(privateView ? '“—”表示该日未记录完整账号或尚未固定，不代表用量为 0。本次仅私聊发送给发起查询的本人。' :
+    '“—”表示该日未记录完整账号，不代表用量为 0。仅发送到已绑定目标群；群成员均可看到邮箱与金额。'));
   const card = { config: { wide_screen_mode: true, enable_forward: false, update_multi: true },
-    header: { template: 'blue', title: plain(`${name.trim()} · 每日用量`) }, elements };
+    header: { template: 'blue', title: plain(`${name.trim()} · ${privateView ? '用户用量' : '每日用量'}`) }, elements };
   if (Buffer.byteLength(JSON.stringify(card), 'utf8') > MAX_CARD_BYTES)
     throw new Error('飞书用量卡片超过安全大小限制，本次不发送不完整表格。');
   return card;
