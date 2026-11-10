@@ -1,5 +1,6 @@
 'use strict';
 const { dayKey } = require('./daily-usage');
+const { projectSnapshots, membershipPhase, datedIds } = require('./ownership-dates');
 
 const DAY_MS = 24 * 60 * 60_000;
 const dateOf = day => Date.parse(`${dayKey(day)}T00:00:00Z`);
@@ -27,7 +28,9 @@ function historyCatalog(state, currentNames, today) {
     .sort((a, b) => a.localeCompare(b, 'zh-CN'));
   return { months, weeksByMonth: Object.fromEntries(months.map(month => [month, weeksInMonth(month)])), names, today };
 }
-function historyWeek(state, { month, weekStart, name }, today, currentNames = []) {
+function historyWeek(state, { month, weekStart, name }, today, currentNames = [], currentAccounts = [], datedProfiles = []) {
+  state = projectSnapshots(state, datedProfiles);
+  const datedProfile = datedProfiles.find(profile => profile.name === name);
   dayKey(today);
   const week = weeksInMonth(month).find(row => row.start === weekStart);
   if (!week) throw Error('所选周不属于该月份。');
@@ -38,7 +41,7 @@ function historyWeek(state, { month, weekStart, name }, today, currentNames = []
     const snapshot = state.snapshots[day];
     const profile = snapshot?.rows.find(row => row.name === name);
     return { day, phase: day > today ? 'future' : !profile ? 'missing' :
-      snapshot.final ? 'final' : 'ongoing', checkedAt: profile ? snapshot.checkedAt : null,
+      snapshot.final ? 'final' : day < today ? 'pending' : 'ongoing', checkedAt: profile ? snapshot.checkedAt : null,
       source: profile ? snapshot.source || 'scheduled' : null,
       users: profile?.users || [] };
   });
@@ -47,16 +50,38 @@ function historyWeek(state, { month, weekStart, name }, today, currentNames = []
     const row = users.get(user.id) || { id: user.id, email: user.email, costs: {} };
     row.email = user.email; row.costs[day.day] = user.cost; users.set(user.id, row);
   }
+  for (const day of days.filter(d=>d.day<=today)) for (const id of datedIds(datedProfile,day.day) || []) {
+    if(!users.has(id))users.set(id,{id,email:datedProfile.membership?.labels?.find(u=>u.id===id)?.email ||
+      currentAccounts.find(u=>u.id===id)?.email || `平台用户 ID ${id}（邮箱待同步）`,costs:{}});
+  }
+  // A saved assignment is enough to show a row in the current week. Amounts
+  // remain absent until sampled; this projection never rewrites historical data.
+  const currentIds = new Set();
+  if (week.start <= today && today <= week.end) for (const account of currentAccounts) {
+    currentIds.add(account.id);
+    if (!users.has(account.id)) users.set(account.id, {
+      id: account.id, email: account.email || `平台用户 ID ${account.id}（邮箱待同步）`, costs: {}
+    });
+  }
   const rows = [...users.values()].sort((a, b) => a.id - b.id).map(user => {
     const values = days.map(day => Object.hasOwn(user.costs, day.day) ? user.costs[day.day] : null);
+    const membership = days.map(day => membershipPhase(datedProfile, user.id, day.day));
     return { id: user.id, email: user.email, values,
+      membership,
+      awaitingSample: currentIds.has(user.id) && !Object.hasOwn(user.costs, today),
+      currentAssigned: currentIds.has(user.id), hasRecordedUsage: values.some(value => value !== null),
       recordedSubtotal: values.reduce((sum, value) => sum + (value ?? 0), 0),
-      complete: values.every((value, index) => value !== null && days[index].phase === 'final') };
+      complete: values.every((value, index) => (value !== null || membership[index] !== null) && days[index].phase === 'final') };
   });
-  const totals = days.map((day, index) => day.phase === 'missing' || day.phase === 'future' ? null :
-    rows.reduce((sum, row) => sum + (row.values[index] ?? 0), 0));
-  const totalsComplete = days.map((day, index) => day.phase === 'final' && rows.every(row => row.values[index] !== null));
-  return { month, week, name, days: days.map(({ users: _users, ...day }) => day), rows, totals,
+  const totals = days.map((day, index) => {
+    if(day.phase === 'missing' || day.phase === 'future')return null;
+    const applicable=rows.filter(row=>!row.membership[index]);
+    if(applicable.length && applicable.every(row=>row.values[index]===null))return null;
+    return applicable.reduce((sum,row)=>sum+(row.values[index]??0),0);
+  });
+  const totalsComplete = days.map((day, index) => day.phase === 'final' && rows.every(row => row.values[index] !== null || row.membership[index]));
+  return { month, week, name, today, awaitingCount: rows.filter(row => row.awaitingSample).length,
+    days: days.map(({ users: _users, ...day }) => day), rows, totals,
     totalsComplete,
     recordedSubtotal: totals.reduce((sum, value) => sum + (value ?? 0), 0),
     complete: days.every(day => day.phase === 'final') && rows.every(row => row.complete) };

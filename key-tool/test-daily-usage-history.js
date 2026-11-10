@@ -49,3 +49,36 @@ test('completed week has a full total, empty person and invalid filter do not le
   assert.throws(() => historyWeek(complete, { month: '2026-11', weekStart: '2026-11-16', name: '不存在' }, '2026-11-09'));
   assert.throws(() => historyWeek(complete, { month: '2026-10', weekStart: '2026-11-02', name: '甲' }, '2026-11-09'));
 });
+test('past unfinished day is pending finalization, not today ongoing or a completed total', () => {
+  const data = historyWeek(state, { month: '2026-11', weekStart: '2026-11-02', name: '甲' }, '2026-11-09');
+  assert.equal(data.days.find(day => day.day === '2026-11-06').phase, 'pending');
+  assert.equal(data.rows[0].values[4], 6);
+  assert.equal(data.totalsComplete[4], false);
+  assert.equal(data.complete, false);
+});
+
+test('current week lists newly assigned accounts immediately with unknown amounts, without changing snapshots', () => {
+  const before = structuredClone(state);
+  const current = [{ id: 1, email: 'current1@example.invalid' }, { id: 2, email: 'current2@example.invalid' },
+    { id: 4, email: 'new@example.invalid' }];
+  const data = historyWeek(state, { month: '2026-11', weekStart: '2026-11-02', name: '甲' }, today, ['甲'], current);
+  assert.deepEqual(data.rows.map(r => r.id), [1, 2, 4]);
+  const added = data.rows.find(r => r.id === 4);
+  assert.equal(added.email, 'new@example.invalid');
+  assert.deepEqual(added.values, Array(7).fill(null));
+  assert.equal(added.awaitingSample, true);
+  assert.equal(added.hasRecordedUsage, false);
+  assert.equal(data.awaitingCount, 2);
+  assert.deepEqual(data.totals, [5, 4, null, null, 6, null, null]);
+  assert.deepEqual(state, before);
+  const historical = historyWeek(state, { month: '2026-11', weekStart: '2026-11-02', name: '甲' }, '2026-11-09', ['甲'], current);
+  assert.deepEqual(historical.rows.map(r => r.id), [1, 2]);
+});
+
+test('new person with no samples still lists every assigned account without fabricated zero totals', () => {
+  const data = historyWeek({ snapshots: {} }, { month: '2026-11', weekStart: '2026-11-09', name: '新增' },
+    '2026-11-09', ['新增'], [{ id: 5, email: 'five@example.invalid' }]);
+  assert.equal(data.rows.length, 1);
+  assert.equal(data.rows[0].awaitingSample, true);
+  assert.deepEqual(data.totals, Array(7).fill(null));
+});

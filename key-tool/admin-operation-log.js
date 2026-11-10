@@ -21,12 +21,14 @@ const ACTIONS = Object.freeze({
   'admin-channel-access-save':'保存成员渠道授权', 'admin-channel-access-update':'更新成员渠道授权',
   'admin-channel-access-revoke':'撤销成员渠道授权',
   'admin-user-ownership-save-name':'按姓名保存用户归属',
+  'admin-user-ownership-client-change':'修改客户归属（按日期生效）',
   'admin-user-ownership-link':'核对并绑定飞书成员归属',
   'admin-daily-usage-preview':'预览归属每日用量', 'admin-daily-usage-enable':'启用并发布每日用量群表',
   'admin-daily-usage-pause':'暂停每日用量群表', 'admin-daily-usage-now':'立即更新每日用量群表',
   'admin-daily-usage-review-absent':'人工核对首次群卡片未见并暂停',
   'admin-daily-usage-backfill-current-month':'补采本月已结束日期用量',
   'admin-daily-usage-history-export':'导出历史用量 Excel',
+  'admin-daily-usage-collect-today':'采样今日归属用量（不发群）',
   'admin-account-schedule-snapshot':'读取平台账号与计划', 'admin-account-schedule-create':'保存账号定时计划',
   'admin-account-schedule-cancel':'取消账号定时步骤', 'admin-account-schedule-reconcile':'只读核对账号开关'
 });

@@ -3,6 +3,8 @@ const { createHash } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { ToolError } = require('./service');
+const { beijingDay } = require('./daily-usage');
+const { validateMembership, changeMembership, datedIds, membershipStart } = require('./ownership-dates');
 
 const validId = value => Number.isSafeInteger(value) && value > 0;
 const validOpenId = value => typeof value === 'string' && /^ou_[\w-]{4,252}$/.test(value);
@@ -19,6 +21,10 @@ function validateRows(rows) {
   const seen = new Set(), profiles = new Set();
   for (const row of rows) {
     const profile = row?.state === 'profile';
+    if (row?.membership !== undefined) {
+      try { if (!profile) throw Error('not a profile'); validateMembership(row.membership, row.userIds); }
+      catch { fail('STORAGE', '归属生效记录损坏，请保留原件。'); }
+    }
     if (!validId(row?.owner) || !validGroupId(row.groupId) ||
         (profile ? row.openId !== null : !validOpenId(row.openId)) ||
         typeof row.name !== 'string' || !row.name || label(row.name) !== row.name ||
@@ -29,6 +35,12 @@ function validateRows(rows) {
           !row.profileName || label(row.profileName) !== row.profileName)) ||
         (row.state !== 'linked' && row.profileName !== undefined))
       fail('STORAGE', '用户归属配置损坏，请保留原件。');
+    if (row.userLabels !== undefined && (!profile || !Array.isArray(row.userLabels) ||
+        new Set(row.userLabels.map(u => u?.id)).size !== row.userLabels.length ||
+        row.userLabels.some(u => !validId(u?.id) || !row.userIds.includes(u.id) ||
+          Object.keys(u).sort().join(',') !== 'email,id' || typeof u.email !== 'string' ||
+          !u.email || u.email.length > 254 || /[\x00-\x1f\x7f]/.test(u.email))))
+      fail('STORAGE', '归属账号显示信息损坏，请保留原件。');
     if (profile) {
       const key = `${row.owner}:${row.groupId}:${nameKey(row.name)}`;
       if (profiles.has(key)) fail('STORAGE', '用户归属配置损坏，请保留原件。');
@@ -124,9 +136,10 @@ function publicUser(raw) {
     status: raw.status, role: raw.role, concurrency: Number.isSafeInteger(raw.concurrency) ? raw.concurrency : null };
 }
 class UserOwnership {
-  constructor({ request, store, audit = null, getOwner, getGroupId }) {
-    Object.assign(this, { request, store, audit, getOwner, getGroupId });
+  constructor({ request, store, audit = null, getOwner, getGroupId, now = () => Date.now() }) {
+    Object.assign(this, { request, store, audit, getOwner, getGroupId, now });
     this.rows = validateRows(store.load()); this.busy = false; this.storageFault = false;
+    this.userDirectory = null;
     if (audit) audit.load();
   }
   scope() {
@@ -142,6 +155,7 @@ class UserOwnership {
     return scope;
   }
   async users() {
+    const directoryScope = this.scope();
     const out = [], seen = new Set(); let total;
     for (let page = 1; page <= 50; page++) {
       const data = await this.request('GET', `/admin/users?page=${page}&page_size=100`);
@@ -154,7 +168,12 @@ class UserOwnership {
         if (seen.has(user.id)) fail('SCHEMA', '平台分页出现重复用户。');
         seen.add(user.id); out.push(user);
       }
-      if (out.length === total) return out;
+      if (out.length === total) {
+        const active = this.scope();
+        if (active.owner === directoryScope.owner && active.groupId === directoryScope.groupId)
+          this.userDirectory = { ...directoryScope, emails: new Map(out.map(u => [u.id, u.email])) };
+        return out;
+      }
       if (!data.items.length || out.length > total) fail('SCHEMA', '平台分页不完整。');
     }
     fail('LIMIT', '平台用户超过本次读取上限。');
@@ -169,6 +188,77 @@ class UserOwnership {
     const scope = this.scope();
     return this.rows.filter(r => r.owner === scope.owner && r.groupId === scope.groupId && r.state === 'profile')
       .map(r => ({ name: r.name, userIds: [...r.userIds] }));
+  }
+  datedProfiles() {
+    const scope = this.scope();
+    return this.rows.filter(r => r.owner === scope.owner && r.groupId === scope.groupId && r.state === 'profile')
+      .map(r => ({ name: r.name, userIds: [...r.userIds], ...(r.membership ? { membership: structuredClone(r.membership) } : {}) }));
+  }
+  profilesAt(day) {
+    return this.datedProfiles().map(row => ({ name: row.name,
+      userIds: datedIds(row, day) ?? row.membership?.baselineIds ?? row.userIds }));
+  }
+  clients() {
+    const scope = this.scope();
+    return this.rows.filter(r => r.owner === scope.owner && r.groupId === scope.groupId && r.state === 'profile')
+      .flatMap(profile => this.profileAccounts(profile.name).map(user => ({ ...user, name: profile.name,
+        since: membershipStart(profile, user.id) })));
+  }
+  revision() {
+    const scope = this.scope();
+    return fingerprint(JSON.stringify(this.rows.filter(row => row.owner === scope.owner && row.groupId === scope.groupId)));
+  }
+  async changeClient(input) {
+    if (this.busy || this.storageFault) fail('BUSY', '归属正在处理或存储异常。');
+    if (!input || !['add', 'remove', 'move'].includes(input.action) || !validId(input.userId) ||
+        typeof input.revision !== 'string') fail('INPUT', '客户操作参数无效。');
+    const name = label(input.name), targetName = input.action === 'move' ? label(input.targetName) : null;
+    this.busy = true;
+    try {
+      const scope = await this.admin();
+      const revision = this.revision();
+      if (revision !== input.revision) fail('CONFLICT', '归属已被修改，请刷新客户表再操作。');
+      const matches = r => r.owner === scope.owner && r.groupId === scope.groupId && r.state === 'profile';
+      const source = this.rows.find(r => matches(r) && r.name === name);
+      const target = input.action === 'move' ? this.rows.find(r => matches(r) && r.name === targetName) : null;
+      if (!source || (input.action === 'move' && (!target || source === target))) fail('INPUT', '请选择有效且不同的归属档案。');
+      if (input.action !== 'add' && !source.userIds.includes(input.userId)) fail('CONFLICT', '客户已不在此归属中。');
+      if (input.action === 'add' && source.userIds.includes(input.userId) || target?.userIds.includes(input.userId))
+        fail('CONFLICT', '目标归属已包含该客户，不会重复添加。');
+      let email = this.profileAccounts(name).find(u => u.id === input.userId)?.email;
+      if (input.action !== 'remove') {
+        const user = (await this.users()).find(u => u.id === input.userId && u.role === 'user');
+        if (!user) fail('INPUT', '平台普通用户不存在，请重新读取列表。');
+        email = user.email;
+      }
+      const verified = await this.admin();
+      if (verified.owner !== scope.owner || verified.groupId !== scope.groupId || this.revision() !== revision)
+        fail('POLICY', '管理员、群或归属已变化。');
+      const day = beijingDay(this.now());
+      const update = (profile, ids) => {
+        const known = this.profileAccounts(profile.name).filter(u=>u.email);
+        const labels = ids.map(id => ({ id, email: id === input.userId ? email :
+          known.find(u => u.id === id)?.email })).filter(u => u.email);
+        return { ...profile, userIds: ids, userLabels: labels,
+          membership: changeMembership(profile, ids, day, [...known,...labels]) };
+      };
+      const next = this.rows.map(r => r === source ? update(r, input.action === 'add' ? [...r.userIds, input.userId] :
+        r.userIds.filter(id => id !== input.userId)) : r === target ? update(r, [...r.userIds, input.userId]) : r);
+      try { validateRows(next); this.store.save(next); this.rows = next; }
+      catch { this.storageFault = true; fail('STORAGE', '归属变更未安全保存，请保留原件。'); }
+      return { profiles: this.profiles(), clients: this.clients(), identities: this.list(), changes: this.changeHistory(),
+        revision: this.revision(), effectiveDay: day };
+    } finally { this.busy = false; }
+  }
+  profileAccounts(name) {
+    const scope = this.scope();
+    const profile = this.rows.find(r => r.owner === scope.owner && r.groupId === scope.groupId &&
+      r.state === 'profile' && r.name === name);
+    if (!profile) return [];
+    const cached = this.userDirectory?.owner === scope.owner && this.userDirectory?.groupId === scope.groupId ?
+      this.userDirectory.emails : new Map();
+    return profile.userIds.map(id => ({ id, email: cached.get(id) ||
+      profile.userLabels?.find(u => u.id === id)?.email || null }));
   }
   queryHistory() {
     const scope = this.scope();
@@ -197,16 +287,17 @@ class UserOwnership {
       current.scope.groupId === expected.scope?.groupId && current.name === expected.name &&
       JSON.stringify(current.userIds) === JSON.stringify(expected.userIds);
   }
-  auditUsage(openId, binding, status, count = 0) {
+  auditUsage(openId, binding, status, count = 0, kind = 'usage') {
     if (!validOpenId(openId) || !['found', 'not-found', 'error'].includes(status) ||
-        !Number.isSafeInteger(count) || count < 0 || count > 2000) fail('INPUT', '用量查询审计参数无效。');
+        !Number.isSafeInteger(count) || count < 0 || count > 2000 ||
+        !['usage','usage-all'].includes(kind)) fail('INPUT', '用量查询审计参数无效。');
     if (!this.audit || this.storageFault) fail('STORAGE', '用量查询记录暂不可写入，本次不展示资料。');
     const scope = binding?.scope || this.scope();
     const current = this.rows.find(row => row.owner === scope.owner && row.groupId === scope.groupId && row.openId === openId);
     const actorName = binding?.actorName || current?.name || `飞书用户#${fingerprint(openId).slice(0, 12)}`;
     try {
       this.audit.append({ ...scope, openId, actorName, name: binding?.name || '未绑定归属',
-        kind: 'usage', status, count, at: new Date().toISOString() });
+        kind, status, count, at: new Date().toISOString() });
     } catch { this.storageFault = true; fail('STORAGE', '用量查询记录未安全保存，本次不展示资料；请保留原件。'); }
   }
   changeHistory() {
@@ -238,7 +329,7 @@ class UserOwnership {
     try { const scope = await this.admin(), users = await this.users(), current = await this.admin();
       if (current.owner !== scope.owner || current.groupId !== scope.groupId) fail('POLICY', '管理员或目标群已变化。');
       return { users: users.sort((a,b) => a.balance-b.balance || a.id-b.id),
-        identities: this.list(), profiles: this.profiles(), queries: this.queryHistory(), changes: this.changeHistory() };
+        identities: this.list(), profiles: this.profiles(), clients: this.clients(), revision: this.revision(), queries: this.queryHistory(), changes: this.changeHistory() };
     } finally { this.busy = false; }
   }
   async assignName({ name, userIds }) {
@@ -257,11 +348,14 @@ class UserOwnership {
       const key = nameKey(title);
       const existing = this.rows.find(r => r.state === 'profile' && r.owner === scope.owner &&
         r.groupId === scope.groupId && nameKey(r.name) === key);
-      const next = existing ? this.rows.map(r => r === existing ? { ...r, userIds: [...userIds] } : r) :
-        [...this.rows, { ...scope, openId: null, name: title, userIds: [...userIds], state: 'profile' }];
+      const byId = new Map(users.map(u => [u.id, u.email]));
+      const userLabels = userIds.map(id => ({ id, email: byId.get(id) }));
+      const membership = changeMembership(existing, userIds, beijingDay(this.now()), userLabels);
+      const next = existing ? this.rows.map(r => r === existing ? { ...r, userIds: [...userIds], userLabels, membership } : r) :
+        [...this.rows, { ...scope, openId: null, name: title, userIds: [...userIds], userLabels, membership, state: 'profile' }];
       if (next.length > 5000) fail('LIMIT', '归属档案已达上限。');
       try { this.store.save(next); this.rows = next; } catch { this.storageFault = true; fail('STORAGE', '归属未安全保存，请保留原件。'); }
-      return { profiles: this.profiles(), identities: this.list(), changes: this.changeHistory() };
+      return { profiles: this.profiles(), clients: this.clients(), revision: this.revision(), identities: this.list(), changes: this.changeHistory() };
     } finally { this.busy = false; }
   }
   async link({ identity, profileName }) {
@@ -290,7 +384,7 @@ class UserOwnership {
         profileName: profile.name, userIds: [] } : row);
       try { this.store.save(next); this.rows = next; }
       catch { this.storageFault = true; fail('STORAGE', '飞书身份绑定未安全保存，请保留原件。'); }
-      return { identities: this.list(), profiles: this.profiles(), changes: this.changeHistory() };
+      return { identities: this.list(), profiles: this.profiles(), clients: this.clients(), revision: this.revision(), changes: this.changeHistory() };
     } finally { this.busy = false; }
   }
   async assign({ identity, name, userIds }) {

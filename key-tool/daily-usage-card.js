@@ -1,6 +1,6 @@
 'use strict';
 
-const { dayKey, finiteCost } = require('./daily-usage');
+const { dayKey, finiteCost, beijingDay } = require('./daily-usage');
 const MAX_CARD_BYTES = 28_000;
 const clean = value => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').trim();
 const cost = value => `$${finiteCost({ total_actual_cost: value }).toFixed(4)}`;
@@ -32,9 +32,10 @@ function dailyUsageCard({ name, days, checkedAt, windows = 3, privateView = fals
   const row = values => ({ tag: 'column_set', flex_mode: 'stretch', background_style: 'default',
     columns: values.map((value, index) => ({ tag: 'column', width: 'weighted',
       weight: index === 0 ? 3 : 1, elements: [div(value)] })) });
-  const headers = ['平台账号', ...ordered.map(day => `${day.day.slice(5)}${day.final ? '' : ' *'}`)];
+  const currentDay = beijingDay(Date.parse(checkedAt));
+  const headers = ['平台账号', ...ordered.map(day => `${day.day.slice(5)}${day.final ? '' : day.day < currentDay ? ' 待补齐' : ' *'}`)];
   const elements = [div(`归属：${name.trim()} · 用户实付（USD）`),
-    div(`更新：${new Date(checkedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })} 北京时间 · * 今日进行中；仅统计已成功读取的自然日。`),
+    div(`更新：${new Date(checkedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })} 北京时间 · * 今日进行中；历史待补齐日金额仅为已记录小计。`),
     row(headers)];
   let total = Array(ordered.length).fill(0);
   for (const [id, email] of users) {

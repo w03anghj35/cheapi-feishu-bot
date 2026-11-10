@@ -90,6 +90,16 @@
 <section id="user-ownership" class="history" data-admin-view="user-ownership" hidden aria-labelledby="user-ownership-title"><div class="section-title"><h2 id="user-ownership-title">用户归属</h2><button id="ownership-refresh" type="button">读取平台用户与查询申请</button></div>
 <p class="hint">先按归属姓名建立档案并勾选平台用户。成员从已绑定群 @机器人、在私聊点“用户查询”后，机器人会回显飞书显示名和身份摘要；管理员核对身份并明确绑定到姓名档案后，该成员再次点击“用户查询”即可直接查看自己的归属账号，无需输入姓名。显示名本身不是身份验证。</p>
 <p id="ownership-notice" role="status" aria-live="polite">请先读取平台用户与查询申请。</p>
+<section class="ownership-client-panel" aria-labelledby="ownership-client-title">
+<h3 id="ownership-client-title">已保存客户表</h3>
+<p class="hint">此表显示每位归属人的当前客户。“移除”仅解除归属，不删除平台账号；从北京时间当天起不再计入该归属，之前记录保留。跨删除日的周表保留旧日金额，删除日起标“已移除”。</p>
+<div class="ownership-client-filters"><label>归属人<select id="ownership-client-filter"><option value="">全部归属人</option></select></label><label>查询客户<input id="ownership-client-search" type="search" maxlength="200" placeholder="归属人、邮箱、用户名或用户ID"></label></div>
+<p id="ownership-client-summary" role="status"></p>
+<div class="history-table-wrap" tabindex="0" role="region" aria-label="当前归属客户表"><table class="ownership-client-table"><thead><tr><th>归属人</th><th>客户／邮箱／ID</th><th>生效日期</th><th>修改归属／移除／用量</th></tr></thead><tbody id="ownership-client-rows"></tbody></table></div>
+<form id="ownership-client-add-form" class="ownership-client-filters"><label>添加到归属人<select id="ownership-client-add-owner" required></select></label><label>平台客户<select id="ownership-client-add-user" required></select></label><button id="ownership-client-add" type="submit" disabled>添加客户（当天生效）</button></form>
+<p id="ownership-client-status" role="status" aria-live="polite">请先读取平台用户与查询申请。</p>
+</section>
+<details id="ownership-editor"><summary>新建归属姓名、批量编辑客户与飞书身份绑定</summary>
 <p id="ownership-draft-status" role="status" aria-live="polite">未读取草稿状态。</p>
 <label>归属档案<select id="ownership-profile"><option value="">新建归属姓名</option></select></label>
 <label>归属姓名<input id="ownership-name" type="text" maxlength="100" autocomplete="off" placeholder="填写唯一的完整姓名"></label>
@@ -101,7 +111,7 @@
 <p id="ownership-summary" class="muted"></p><div id="ownership-users" class="ownership-users"></div>
 <div class="settings-save-bar"><button id="ownership-save" class="dark" type="button" disabled>保存此姓名的用户归属</button><p class="hint">取消全部勾选并保存，该姓名仍保留档案但查询结果为空。余额每次查询时重新读取平台；同名档案不得重复建立。</p></div>
 <details class="ownership-query-history"><summary>最近归属修改记录</summary><p class="hint">仅显示最近 100 条；完整加密快照保存在本机归属记录文件中，旧版本记录可能没有时间。</p><div id="ownership-change-rows"></div></details>
-<details class="ownership-query-history"><summary>最近查询记录</summary><p class="hint">仅显示最近 100 条：已绑定身份摘要、归属档案姓名、时间、结果及用户数量；不保存查询时的余额快照。</p><div id="ownership-query-rows"></div></details></section>
+<details class="ownership-query-history"><summary>最近查询记录</summary><p class="hint">仅显示最近 100 条：已绑定身份摘要、归属档案姓名、时间、结果及用户数量；不保存查询时的余额快照。</p><div id="ownership-query-rows"></div></details></details></section>
 <section id="daily-usage" class="history" data-admin-view="user-ownership" hidden aria-labelledby="daily-usage-title">
 <h3 id="daily-usage-title">归属用户每日用量</h3>
 <p class="hint">每位归属人一张最近 3 天的滚动日表，逐账号显示邮箱与用户实付金额。仅发送到当前绑定目标群，该群全体成员都能看到。群卡片只在管理员设定的北京时间每日时刻更新一次；本机历史仍约每小时只读采样。程序须保持运行，错过当天时刻不追发。</p>
@@ -115,7 +125,9 @@
 <div class="section-title"><h2 id="usage-history-title">归属用量 · 历史周表</h2><button id="usage-history-refresh" type="button">重新读取本机记录</button></div>
 <p id="usage-history-collection-status" role="status" aria-live="polite">正在核对本机自动采样状态…</p>
 <p class="hint">Excel 风格周表，不受群卡片最近 3 天限制。按北京时间周一至周日统计用户实付（USD）；没有采集的日期显示“未记录”，不是 0。今日显示“进行中”，周合计未完整时仅为已记录小计。手动补采仅查询本月已结束日期，并按当前归属回填，不代表当日历史归属；本页绝不发群。</p>
-<div class="channel-buttons"><button id="usage-history-backfill" type="button">补采本月已结束日期</button></div>
+<div class="channel-buttons"><button id="usage-history-collect-today" type="button">立即采样今日用量（不发群）</button><button id="usage-history-backfill" type="button">补采本月已结束日期</button></div>
+<p class="hint">新增归属账号后，后台会在下一轮检查采样今天；也可点“立即采样今日用量”。“重新读取本机记录”只刷新已有快照，“补采本月已结束日期”不包含今天。</p>
+<p id="usage-history-today-status" role="status" aria-live="polite"></p>
 <p id="usage-history-backfill-status" role="status" aria-live="polite">补采不会自动开始。读取量较大时可能需要数分钟；每次最多运行 10 分钟，未完成可再次点击续采。</p>
 <div class="usage-history-filters">
 <label>月份<select id="usage-history-month" aria-label="选择月份"></select></label>
@@ -128,7 +140,7 @@
 <button id="usage-history-export-person" type="button">导出当前归属人</button>
 <button id="usage-history-export-all" type="button">导出全部归属人</button>
 </div>
-<p id="usage-history-export-status" role="status" aria-live="polite">按选定日期导出本机已有用量为 Excel 文件；默认当前周，未记录日期不会当作零。</p>
+<p id="usage-history-export-status" role="status" aria-live="polite">按选定日期导出横向 Excel 日表：左侧归属姓名与平台账号，上方每天一列，含各归属合计；默认当前周，未记录日期不会当作零。</p>
 <p id="usage-history-status" role="status" aria-live="polite">打开此栏目后读取本机历史记录。</p>
 <div id="usage-history-table" class="usage-history-table-wrap"></div>
 </section>

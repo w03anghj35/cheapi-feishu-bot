@@ -25,6 +25,10 @@ contextBridge.exposeInMainWorld('groupAdmin', {
   groupSettingsRefresh: call('group-settings-refresh'), groupSettingsSave: call('group-settings-save'),
   groupSettingsRecords: call('group-settings-records'), groupSettingsReview: call('group-settings-review'),
   userOwnershipList: call('user-ownership-list'), userOwnershipSave: call('user-ownership-save'),
+  userOwnershipClientChange: call('user-ownership-client-change'),
+  onOwnershipChanged: callback => { const listener = () => callback();
+    ipcRenderer.on('key-tool:ownership-changed', listener);
+    return () => ipcRenderer.removeListener('key-tool:ownership-changed', listener); },
   userOwnershipSaveName: call('user-ownership-save-name'),
   userOwnershipLink: call('user-ownership-link'),
   userOwnershipDraftState: call('user-ownership-draft-state'), userOwnershipDraftSave: call('user-ownership-draft-save'),
@@ -33,6 +37,7 @@ contextBridge.exposeInMainWorld('groupAdmin', {
   dailyUsageReviewAbsent: call('daily-usage-review-absent'),
   dailyUsageNow: call('daily-usage-now'),
   dailyUsageHistoryCatalog: call('daily-usage-history-catalog'),
+  dailyUsageCollectToday: call('daily-usage-collect-today'),
   dailyUsageHistoryWeek: call('daily-usage-history-week'),
   dailyUsageHistoryExport: call('daily-usage-history-export'),
   dailyUsageBackfillStatus: call('daily-usage-backfill-status'),

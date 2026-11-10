@@ -125,11 +125,13 @@ async function verifyUI({ app, ui, fixture, registrationService, tokenService, u
       'admin-feishu-save-credentials', 'admin-feishu-state', 'admin-registration-records', 'admin-registration-review',
       'admin-group-settings-refresh', 'admin-group-settings-save', 'admin-group-settings-records', 'admin-group-settings-review', 'admin-operation-log', 'admin-record-table-sync','admin-record-table-open',
       'admin-user-ownership-list', 'admin-user-ownership-save', 'admin-user-ownership-save-name',
+      'admin-user-ownership-client-change',
       'admin-user-ownership-link',
       'admin-user-ownership-draft-state', 'admin-user-ownership-draft-save',
       'admin-daily-usage-state', 'admin-daily-usage-preview', 'admin-daily-usage-enable',
       'admin-daily-usage-pause', 'admin-daily-usage-now', 'admin-daily-usage-review-absent',
       'admin-daily-usage-history-catalog', 'admin-daily-usage-history-week', 'admin-daily-usage-history-export',
+      'admin-daily-usage-collect-today',
       'admin-daily-usage-backfill-status', 'admin-daily-usage-backfill-current-month',
       'admin-account-schedule-snapshot', 'admin-account-schedule-state', 'admin-account-schedule-create',
       'admin-account-schedule-cancel', 'admin-account-schedule-reconcile',
@@ -258,7 +260,13 @@ async function verifyUI({ app, ui, fixture, registrationService, tokenService, u
       const exported = new (require('exceljs').Workbook)();
       await exported.xlsx.readFile(exportPath);
       assert.equal(exported.worksheets.length, 1);
-      assert.equal(exported.getWorksheet('用量明细').getCell('B2').value, 'Alice归属');
+      const usageSheet = exported.getWorksheet('用量明细');
+      assert.equal(usageSheet.getCell('A1').value, '归属姓名');
+      assert.equal(usageSheet.getCell('C1').value.toISOString().slice(0, 10), '2026-11-01');
+      assert.equal(usageSheet.getCell('D1').value.toISOString().slice(0, 10), '2026-11-02');
+      assert.equal(usageSheet.getCell('A3').value, 'Alice归属');
+      assert.equal(usageSheet.getCell('B4').value, '归属人合计');
+      assert.equal(usageSheet.getCell('C4').value, 0, 'recorded empty profile keeps its zero subtotal without inventing account rows');
       const allReply = await adminRun(`window.groupAdmin.dailyUsageHistoryExport({scope:'all',start:'2026-11-01',end:'2026-11-02'})`);
       assert.equal(allReply.ok, true, JSON.stringify(allReply));
       assert.equal(allReply.data.people, 1);

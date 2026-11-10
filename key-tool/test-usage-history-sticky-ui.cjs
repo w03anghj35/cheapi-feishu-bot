@@ -6,6 +6,7 @@ const path = require('node:path');
 const { app, BrowserWindow } = require('electron');
 
 const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-history-sticky-ui-'));
+console.log(JSON.stringify({ fixture: 'usage-history-sticky-ui', pid: process.pid, dataRoot }));
 app.setPath('userData', dataRoot);
 app.commandLine.appendSwitch('disable-gpu');
 process.on('exit', () => {
@@ -30,17 +31,21 @@ const page = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>${c
   <button id="usage-history-export-person"></button><button id="usage-history-export-all"></button>
   <p id="usage-history-export-status"></p>
   <p id="usage-history-collection-status"></p>
+  <button id="usage-history-collect-today"></button><p id="usage-history-today-status"></p>
   <button id="usage-history-backfill"></button><p id="usage-history-backfill-status"></p>
   <p id="usage-history-status"></p><div id="usage-history-table" class="usage-history-table-wrap"></div>
   </section></main><script>
   window.fixtureWeek=${JSON.stringify(sample)};
-  window.fixtureStamp='2026-11-06T00:00:00Z'; window.fixtureIntervals=[];
+  window.fixtureStamp='2026-11-06T00:00:00Z'; window.fixtureIntervals=[]; window.fixturePending=[];
+  window.fixtureCollected=0;
   window.setInterval=(callback,ms)=>{window.fixtureIntervals.push({callback,ms});return window.fixtureIntervals.length};
   window.groupAdmin={dailyUsageHistoryCatalog:async()=>({ok:true,data:{months:['2026-11'],
     weeksByMonth:{'2026-11':[{start:'2026-11-02',end:'2026-11-08'}]},
     names:['虚构归属'],today:'2026-11-09'}}),
+    onOwnershipChanged:callback=>{window.fixtureOwnershipChanged=callback},
     dailyUsageHistoryWeek:async()=>({ok:true,data:window.fixtureWeek}),
-    dailyUsageState:async()=>({ok:true,data:{enabled:false,lastDay:'2026-11-06',lastCheckedAt:window.fixtureStamp,collection:{available:true}}}),
+    dailyUsageState:async()=>({ok:true,data:{enabled:false,lastDay:'2026-11-06',lastCheckedAt:window.fixtureStamp,collection:{available:true,pendingDays:window.fixturePending}}}),
+    dailyUsageCollectToday:async()=>{window.fixtureCollected++;return {ok:true,data:{saved:['2026-11-09']}}},
     dailyUsageBackfillStatus:async()=>({ok:true,data:{phase:'idle'}})};
   </script><script>${renderer}</script>
   <script>window.dispatchEvent(new CustomEvent('admin-view-change',{detail:{view:'usage-history'}}));</script></body></html>`;
@@ -97,6 +102,29 @@ app.whenReady().then(async () => {
     await new Promise(resolve => setTimeout(resolve, 40));
   }
   assert.equal(await window.webContents.executeJavaScript("document.querySelector('.usage-history-table tbody td')?.textContent.includes('99.0000')"), true);
+  // A recovered old day must refresh even if the newest snapshot timestamp has not changed.
+  await window.webContents.executeJavaScript(`(() => {
+    window.fixturePending=['2026-11-07'];
+    window.fixtureWeek.days[5].phase='pending';
+    window.fixtureWeek.totalsComplete[5]=false;
+    window.fixtureWeek.complete=false;
+    window.fixtureIntervals.find(row=>row.ms===60000).callback();
+  })()`);
+  for (let attempt = 0; attempt < 60; attempt++) {
+    if (await window.webContents.executeJavaScript("document.querySelector('.usage-history-table thead')?.textContent.includes('11-07 待补齐')")) break;
+    await new Promise(resolve => setTimeout(resolve, 40));
+  }
+  assert.equal(await window.webContents.executeJavaScript("document.querySelector('.usage-history-table thead')?.textContent.includes('11-07 待补齐')"), true);
+  assert.equal(await window.webContents.executeJavaScript("document.getElementById('usage-history-collection-status').textContent.includes('待补齐历史日期：2026-11-07')"), true);
+  await window.webContents.executeJavaScript(`(() => {
+    window.fixturePending=[]; window.fixtureWeek.days[5].phase='final';
+    window.fixtureIntervals.find(row=>row.ms===60000).callback();
+  })()`);
+  for (let attempt = 0; attempt < 60; attempt++) {
+    if (await window.webContents.executeJavaScript("document.querySelector('.usage-history-table thead')?.textContent.includes('11-07 已固定')")) break;
+    await new Promise(resolve => setTimeout(resolve, 40));
+  }
+  assert.equal(await window.webContents.executeJavaScript("document.querySelector('.usage-history-table thead')?.textContent.includes('11-07 已固定')"), true);
   await window.webContents.executeJavaScript(`(() => {
     window.fixtureWeek={...window.fixtureWeek,rows:[],totals:Array(7).fill(null),
       totalsComplete:Array(7).fill(false),recordedSubtotal:0,complete:false};
@@ -116,6 +144,36 @@ app.whenReady().then(async () => {
   assert.match(empty.message, /暂无已采集/);
   assert.equal(empty.labelled, true);
   assert.equal(empty.noCaption, true);
+  await window.webContents.executeJavaScript(`(() => {
+    window.fixtureWeek={...window.fixtureWeek,today:'2026-11-09',awaitingCount:1,
+      week:{start:'2026-11-09',end:'2026-11-15'},
+      days:Array.from({length:7},(_,i)=>({day:'2026-11-'+String(9+i).padStart(2,'0'),phase:i?'future':'ongoing'})),
+      rows:[1,2,3].map(id=>({id,email:'user'+id+'@example.invalid',values:id===3?Array(7).fill(null):[0,...Array(6).fill(null)],
+        hasRecordedUsage:id!==3,awaitingSample:id===3,complete:false,recordedSubtotal:0}))};
+    window.fixtureOwnershipChanged();
+  })()`);
+  for (let attempt = 0; attempt < 60; attempt++) {
+    if (await window.webContents.executeJavaScript("document.querySelectorAll('.usage-history-table tbody tr').length===3")) break;
+    await new Promise(resolve => setTimeout(resolve, 40));
+  }
+  assert.equal(await window.webContents.executeJavaScript("document.querySelectorAll('.usage-history-table tbody tr').length"), 3);
+  const pendingRow = await window.webContents.executeJavaScript("document.querySelector('.usage-history-table tbody tr:last-child').textContent");
+  assert.match(pendingRow, /user3@example.invalid/); assert.match(pendingRow, /待采样/);
+  assert.match(pendingRow, /尚无记录/); assert.equal(pendingRow.includes('$0.0000'), false);
+  assert.match(await window.webContents.executeJavaScript("document.getElementById('usage-history-status').textContent"), /1 个当前归属账号今日待采样/);
+  await window.webContents.executeJavaScript("document.getElementById('usage-history-collect-today').click()");
+  for (let attempt = 0; attempt < 60; attempt++) {
+    if (await window.webContents.executeJavaScript("!document.getElementById('usage-history-collect-today').disabled")) break;
+    await new Promise(resolve => setTimeout(resolve, 40));
+  }
+  assert.equal(await window.webContents.executeJavaScript('window.fixtureCollected'), 1);
+  assert.match(await window.webContents.executeJavaScript("document.getElementById('usage-history-today-status').textContent"), /今日用量已采样并保存/);
+  await window.webContents.executeJavaScript(`window.groupAdmin.dailyUsageCollectToday=async()=>({ok:true,data:{skipped:'backoff'}});document.getElementById('usage-history-collect-today').click()`);
+  for (let attempt = 0; attempt < 60; attempt++) {
+    if (await window.webContents.executeJavaScript("!document.getElementById('usage-history-collect-today').disabled")) break;
+    await new Promise(resolve => setTimeout(resolve, 40));
+  }
+  assert.match(await window.webContents.executeJavaScript("document.getElementById('usage-history-today-status').textContent"), /等待退避重试/);
   console.log('Fixed title and account column passed at 580px and 1040px.');
   clearTimeout(timer); window.destroy(); app.exit(0);
 }).catch(error => { console.error(error.stack || error.message); clearTimeout(timer); app.exit(1); });

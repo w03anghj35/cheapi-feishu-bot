@@ -7,6 +7,7 @@ const path = require('node:path');
 const { makeDailyUsageStore, validateEvent } = require('./daily-usage-store');
 const { DailyUsagePublisher, groupFailure, HOUR_MS } = require('./daily-usage-publisher');
 const { beijingDay } = require('./daily-usage');
+const { UserOwnership } = require('./user-ownership');
 const scope = { owner: 1, groupId: 'oc_fixture_12345678' };
 const encryption = { isEncryptionAvailable: () => true, getSelectedStorageBackend: () => 'dpapi',
   encryptString: text => Buffer.from(`sealed:${text}`),
@@ -57,6 +58,175 @@ test('scheduled group publish uses a fresh read even after a recent local-only s
   assert.deepEqual(await f.publisher.tick(), { updated: 1, unknown: 0 });
   assert.equal(f.sends.length, 1);
   assert.equal(JSON.stringify(f.sends[0].card).includes('11-05'), true);
+});
+
+test('newly assigned account is sampled before the next hour without rewriting fixed history or sending cards', async t => {
+  const f = fixture(t); await f.publisher.historyTick();
+  const previous = structuredClone(f.store.state(scope).snapshots['2026-11-05']);
+  f.publisher.usage.ownership.profiles = () => [{ name: '虚构归属', userIds: [7, 8] }];
+  f.publisher.usage.read = async day => ({ day, scope, final: day < '2026-11-06',
+    checkedAt: '2026-11-06T02:01:00Z', rows: [{ name: '虚构归属', users: [
+      { id: 7, email: 'a@example.invalid', cost: 3 }, { id: 8, email: 'new@example.invalid', cost: 4 } ] }] });
+  f.setNow(Date.parse('2026-11-06T02:01:00Z'));
+  assert.deepEqual(await f.publisher.historyTick(), { saved: ['2026-11-06'] });
+  assert.deepEqual(f.store.state(scope).snapshots['2026-11-06'].rows[0].users.map(u => u.id), [7, 8]);
+  assert.deepEqual(f.store.state(scope).snapshots['2026-11-05'], previous);
+  assert.equal(f.sends.length + f.patches.length, 0);
+  assert.deepEqual(await f.publisher.historyTick(), { skipped: 'not-due' });
+});
+
+test('real ownership save immediately adds a third weekly row even when stats fails; restart retains email and no fake zero', async t => {
+  const f = fixture(t); await f.publisher.historyTick();
+  let records = [];
+  const ownershipStore = { load: () => structuredClone(records), save: next => { records = structuredClone(next); } };
+  const options = { store: ownershipStore, getOwner: () => scope.owner, getGroupId: () => scope.groupId,
+    request: async (_method, route) => {
+      if (route === '/auth/me') return { id: 1, role: 'admin' };
+      if (route.startsWith('/admin/users?')) return { total: 3, items: [7, 8, 9].map(id =>
+        ({ id, email: `user${id}@example.invalid`, username: `用户${id}`, role: 'user', status: 'active', balance: 0 })) };
+      throw Error('unexpected route');
+    } };
+  let ownership = new UserOwnership(options);
+  await ownership.assignName({ name: '虚构归属', userIds: [7, 8] });
+  await ownership.assignName({ name: '虚构归属', userIds: [7, 8, 9] });
+  f.publisher.usage.ownership = ownership;
+  f.publisher.usage.read = async () => { throw Error('fixture unavailable stats'); };
+  assert.deepEqual(await f.publisher.collectToday(), { saved: [], failed: 'today' });
+  const input = { month: '2026-11', weekStart: '2026-11-02', name: '虚构归属' };
+  let week = f.publisher.historyWeek(input);
+  assert.deepEqual(week.rows.map(r => r.id), [7, 8, 9]);
+  assert.equal(week.rows[2].email, 'user9@example.invalid');
+  assert.equal(week.rows[2].awaitingSample, true);
+  assert.equal(week.rows[2].hasRecordedUsage, false);
+  assert.deepEqual(week.rows[2].values, Array(7).fill(null));
+  ownership = new UserOwnership(options); f.publisher.usage.ownership = ownership;
+  assert.equal(f.publisher.historyWeek(input).rows[2].email, 'user9@example.invalid');
+  await ownership.assignName({ name: '虚构归属', userIds: [7, 8] });
+  assert.deepEqual(f.publisher.historyWeek(input).rows.map(r => r.id), [7, 8]);
+  assert.equal(f.sends.length + f.patches.length, 0);
+});
+
+test('explicit today sampling bypasses the hourly interval but never backfills old days or publishes', async t => {
+  const f = fixture(t); await f.publisher.historyTick();
+  const old = structuredClone(f.store.state(scope).snapshots['2026-11-05']);
+  const reads = f.reads();
+  assert.deepEqual(await f.publisher.collectToday(), { saved: ['2026-11-06'] });
+  assert.equal(f.reads(), reads + 1);
+  assert.deepEqual(f.store.state(scope).snapshots['2026-11-05'], old);
+  assert.equal(f.sends.length + f.patches.length, 0);
+  f.publisher.historyRetryAfter = Date.parse('2026-11-06T03:00:00Z');
+  assert.deepEqual(await f.publisher.collectToday(), { skipped: 'backoff' });
+  assert.equal(f.reads(), reads + 1);
+});
+
+test('today-only read failure or assignment change preserves the last snapshot and backoff', async t => {
+  for (const mode of ['failure','changed']) {
+    const f = fixture(t); await f.publisher.historyTick();
+    const old = structuredClone(f.store.state(scope));
+    const read = f.publisher.usage.read.bind(f.publisher.usage);
+    f.publisher.usage.read = async day => {
+      if (mode === 'failure') throw Error('fixture timeout');
+      const result = await read(day);
+      f.publisher.usage.ownership.profiles = () => [{ name: '虚构归属', userIds: [99] }];
+      return result;
+    };
+    assert.deepEqual(await f.publisher.collectToday(), { saved: [], failed: 'today' });
+    assert.deepEqual(f.store.state(scope), old);
+    assert.deepEqual(await f.publisher.collectToday(), { skipped: 'backoff' });
+    assert.equal(f.sends.length + f.patches.length, 0);
+  }
+});
+test('reopening after a skipped day finalizes recorded old days without any group delivery', async t => {
+  const f = fixture(t);
+  await f.publisher.historyTick();
+  const original = f.store.state(scope).snapshots['2026-11-06'];
+  f.setNow(Date.parse('2026-11-09T02:00:00Z'));
+  assert.deepEqual(await f.publisher.historyTick(), { saved: ['2026-11-08', '2026-11-09', '2026-11-06'] });
+  const next = f.store.state(scope);
+  assert.equal(original.final, false);
+  assert.equal(next.snapshots['2026-11-06'].final, true);
+  assert.equal(next.snapshots['2026-11-06'].source, 'backfill-current-ownership');
+  assert.equal(next.snapshots['2026-11-07'], undefined, 'do not expand into never-recorded history');
+  assert.equal(next.snapshots['2026-11-09'].final, false);
+  assert.deepEqual(await f.publisher.historyTick(), { skipped: 'not-due' });
+  assert.equal(f.sends.length + f.patches.length, 0);
+});
+test('old-day recovery is bounded, continues next tick, and preserves failed day until a full read', async t => {
+  const f = fixture(t);
+  for (const day of ['2026-11-01','2026-11-02','2026-11-03']) {
+    f.store.append({ type: 'snapshot', scope, day, checkedAt: day + 'T02:00:00Z', final: false,
+      rows: [{ name: '虚构归属', users: [{ id: 7, email: 'a@example.invalid', cost: 1 }] }] });
+  }
+  f.setNow(Date.parse('2026-11-09T02:00:00Z'));
+  assert.deepEqual(await f.publisher.historyTick(), { saved: ['2026-11-08','2026-11-09','2026-11-01','2026-11-02'] });
+  assert.deepEqual(f.publisher.state().collection.pendingDays, ['2026-11-03']);
+  const originalRead = f.publisher.usage.read.bind(f.publisher.usage);
+  f.publisher.usage.read = async () => { throw Error('synthetic timeout'); };
+  assert.deepEqual(await f.publisher.historyTick(), { saved: [], failed: 'unfinished' });
+  assert.equal(f.store.state(scope).snapshots['2026-11-03'].final, false);
+  assert.deepEqual(await f.publisher.historyTick(), { skipped: 'backoff' });
+  f.setNow(Date.parse('2026-11-09T02:16:00Z'));
+  f.publisher.usage.read = originalRead;
+  assert.deepEqual(await f.publisher.historyTick(), { saved: ['2026-11-03'] });
+  assert.deepEqual(f.publisher.state().collection.pendingDays, []);
+  assert.equal(f.sends.length + f.patches.length, 0);
+});
+test('old-day recovery does not replace historical assignments with changed current ownership', async t => {
+  const f = fixture(t); await f.publisher.historyTick();
+  f.setNow(Date.parse('2026-11-09T02:00:00Z'));
+  const previous = f.store.state(scope).snapshots['2026-11-06'];
+  f.publisher.usage.ownership.profiles = () => [{ name: '新归属', userIds: [99] }];
+  const originalRead = f.publisher.usage.read.bind(f.publisher.usage);
+  f.publisher.usage.read = async day => ({ ...(await originalRead(day)), rows: [
+    { name: '新归属', users: [{ id: 99, email: 'other@example.invalid', cost: 1 }] }] });
+  assert.deepEqual(await f.publisher.historyTick(), { saved: ['2026-11-08','2026-11-09'] });
+  assert.deepEqual(f.store.state(scope).snapshots['2026-11-06'], previous);
+  assert.deepEqual(f.publisher.state().collection.manualDays, ['2026-11-06']);
+  assert.equal(f.sends.length + f.patches.length, 0);
+});
+test('old-day recovery works across a month boundary and still preserves unknown group deliveries', async t => {
+  const f = fixture(t);
+  f.setFailSend(true); f.enable(); await f.publisher.tick();
+  const cardBefore = f.store.state(scope).cards['虚构归属'];
+  f.setNow(Date.parse('2026-12-01T02:00:00Z'));
+  assert.deepEqual(await f.publisher.historyTick(), { saved: ['2026-11-30','2026-12-01','2026-11-06'] });
+  assert.equal(f.store.state(scope).snapshots['2026-11-06'].final, true);
+  assert.deepEqual(f.store.state(scope).cards['虚构归属'], cardBefore);
+  assert.equal(f.sends.length, 1); assert.equal(f.patches.length, 0);
+});
+test('old-day recovery yields when its dispatch budget is spent and resumes with the remaining day', async t => {
+  const f = fixture(t);
+  for (const day of ['2026-11-01','2026-11-02']) {
+    f.store.append({ type: 'snapshot', scope, day, checkedAt: day + 'T02:00:00Z', final: false,
+      rows: [{ name: '虚构归属', users: [{ id: 7, email: 'a@example.invalid', cost: 1 }] }] });
+  }
+  f.setNow(Date.parse('2026-11-09T02:00:00Z'));
+  const read = f.publisher.usage.read.bind(f.publisher.usage);
+  f.publisher.usage.read = async day => {
+    if (day === '2026-11-01') f.setNow(Date.parse('2026-11-09T02:02:00Z'));
+    return read(day);
+  };
+  assert.deepEqual(await f.publisher.historyTick(), { saved: ['2026-11-08','2026-11-09','2026-11-01'] });
+  assert.equal(f.store.state(scope).snapshots['2026-11-02'].final, false);
+  assert.deepEqual(await f.publisher.historyTick(), { saved: ['2026-11-02'] });
+});
+test('an unfinished response or ownership change cannot mark an old day finalized', async t => {
+  for (const mode of ['unfinished', 'ownership']) {
+    const f = fixture(t); await f.publisher.historyTick();
+    f.setNow(Date.parse('2026-11-09T02:00:00Z'));
+    const originalRead = f.publisher.usage.read.bind(f.publisher.usage);
+    f.publisher.usage.read = async day => {
+      const result = await originalRead(day);
+      if (day === '2026-11-06') {
+        if (mode === 'unfinished') result.final = false;
+        else f.publisher.usage.ownership.profiles = () => [{ name: '虚构归属', userIds: [99] }];
+      }
+      return result;
+    };
+    assert.deepEqual(await f.publisher.historyTick(), { saved: ['2026-11-08','2026-11-09'], failed: 'unfinished' });
+    assert.equal(f.store.state(scope).snapshots['2026-11-06'].final, false);
+    assert.equal(f.sends.length + f.patches.length, 0);
+  }
 });
 test('legacy enabled config without daily time stops automatic group posts but not local sampling', async t => {
   const f = fixture(t);

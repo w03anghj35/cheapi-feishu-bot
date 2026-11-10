@@ -51,7 +51,8 @@ class DailyUsage {
     const startedAt = this.now();
     try {
       const scope = await this.ownership.admin();
-      const profiles = this.ownership.profiles();
+      const currentProfiles = this.ownership.profiles();
+      const profiles = this.ownership.profilesAt?.(date) || currentProfiles;
       if (profiles.length > this.maxProfiles) throw new Error('归属档案超过本次读取上限。');
       const ids = [...new Set(profiles.flatMap(row => row.userIds))];
       if (ids.length > this.maxUsers) throw new Error('归属用户超过本次读取上限。');
@@ -90,7 +91,8 @@ class DailyUsage {
         throw new Error('每日用量读取超过本次时间上限，未发布不完整结果。');
       const verified = await this.ownership.admin();
       if (verified.owner !== scope.owner || verified.groupId !== scope.groupId ||
-          JSON.stringify(this.ownership.profiles()) !== JSON.stringify(profiles))
+          JSON.stringify(this.ownership.profiles()) !== JSON.stringify(currentProfiles) ||
+          JSON.stringify(this.ownership.profilesAt?.(date) || this.ownership.profiles()) !== JSON.stringify(profiles))
         throw new Error('管理员、目标群或归属已变化，本次不发布用量。');
       const rows = profiles.map(profile => ({ name: profile.name,
         users: profile.userIds.map(id => ({ id, username: byId.get(id).username,

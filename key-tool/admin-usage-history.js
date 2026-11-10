@@ -7,25 +7,30 @@
   const collectionStatus = el('usage-history-collection-status');
   const backfillButton = el('usage-history-backfill');
   const backfillStatus = el('usage-history-backfill-status');
+  const collectTodayButton = el('usage-history-collect-today');
+  const todayStatus = el('usage-history-today-status');
   const exportStart = el('usage-history-export-start'), exportEnd = el('usage-history-export-end');
   const exportStatus = el('usage-history-export-status');
   const exportPerson = el('usage-history-export-person'), exportAll = el('usage-history-export-all');
   let catalog = null, generation = 0, observedSnapshot = false, seenSnapshot = '';
+  let requestedPerson = null;
   const money = value => `$${Number(value).toFixed(4)}`;
-  const phaseText = { future: '未到', missing: '未记录', ongoing: '进行中', final: '已固定' };
+  const phaseText = { future: '未到', missing: '未记录', ongoing: '进行中', pending: '待补齐', final: '已固定' };
   const beijingTime = value => new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
   async function refreshCollectionStatus() {
     try {
       const reply = await window.groupAdmin.dailyUsageState();
       if (!reply.ok) throw Error(reply.message);
       const data = reply.data, collection = data.collection || {};
-      const snapshotKey = `${data.lastDay || ''}:${data.lastCheckedAt || ''}`;
+      const snapshotKey = `${data.lastDay || ''}:${data.lastCheckedAt || ''}:${(collection.pendingDays || []).join(',')}`;
       const changed = observedSnapshot && seenSnapshot !== snapshotKey;
       observedSnapshot = true; seenSnapshot = snapshotKey;
       collectionStatus.textContent = `本机每小时采样：${!collection.available ? '等待平台管理员授权与原目标群绑定' :
         collection.busy ? '读取中' : collection.retryAfter ? `失败后等待重试（北京时间 ${beijingTime(collection.retryAfter)}）` : '已就绪'}。` +
         ` 最近已存日期：${data.lastDay || '尚无'}；最近采样：${data.lastCheckedAt ? beijingTime(data.lastCheckedAt) : '尚无'}。` +
-        (collection.failure ? ` 上次${collection.failure === 'yesterday' ? '昨日补读' : '今日读取'}未完成；不会把缺日当零。` : '') +
+        (collection.failure ? ` 上次${collection.failure === 'unfinished' ? '历史待补齐日期读取' : collection.failure === 'yesterday' ? '昨日补读' : '今日读取'}未完成；不会把缺日当零。` : '') +
+        (collection.pendingDays?.length ? ` 待补齐历史日期：${collection.pendingDays.join('、')}。` : '') +
+        (collection.manualDays?.length ? ` 其中 ${collection.manualDays.join('、')} 的归属与当前不同，自动补齐已保留原记录，请管理员先核对。` : '') +
         ` 群卡片${data.enabled && data.dailyTime ? `每日 ${data.dailyTime} 北京时间定时更新` :
           data.enabled ? '待设置每日时间（自动发送已停）' : '未启用'}，不影响本机采样。`;
       if (changed && !el('usage-history').hidden) void refresh();
@@ -66,8 +71,11 @@
     for (const user of data.rows) {
       const tr = document.createElement('tr'); cell(tr, 'th', user.email);
       user.values.forEach((value, index) => cell(tr, 'td', value === null ?
-        (data.days[index].phase === 'future' ? '未到' : '未记录') : money(value)));
-      cell(tr, 'td', `${money(user.recordedSubtotal)}${user.complete ? '' : '（已记录小计）'}`);
+        (user.membership?.[index] === 'removed' ? '已移除' : user.membership?.[index] === 'unassigned' ? '未归属' :
+          user.awaitingSample && data.days[index].day === data.today ? '待采样' :
+          data.days[index].phase === 'future' ? '未到' : '未记录') : money(value)));
+      cell(tr, 'td', user.hasRecordedUsage === false ? '尚无记录' :
+        `${money(user.recordedSubtotal)}${user.complete ? '' : '（已记录小计）'}`);
       body.append(tr);
     }
     if (!data.rows.length) {
@@ -84,6 +92,7 @@
     foot.append(total); table.append(foot); scroll.append(table); root.append(title, scroll);
     const recorded = data.days.filter(day => day.checkedAt).map(day => day.checkedAt).sort();
     status.textContent = `已读取 ${data.rows.length} 个账号；${data.complete ? '完整周统计' : '此周尚不完整，周合计仅为已记录小计'}。` +
+      (data.awaitingCount ? ` ${data.awaitingCount} 个当前归属账号今日待采样，未读取金额不计为零。` : '') +
       (recorded.length ? ` 最近采样（北京时间）：${new Date(recorded.at(-1)).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}。` : ' 本周尚无采样。');
   }
   async function readWeek() {
@@ -100,7 +109,8 @@
   }
   async function refresh() {
     const serial = ++generation;
-    const previous = { month: month.value, week: week.value, person: person.value };
+    const previous = { month: month.value, week: week.value, person: requestedPerson || person.value };
+    requestedPerson = null;
     catalog = null; root.replaceChildren(); status.textContent = '正在读取本机可用的历史月份与归属人…';
     month.disabled = true; week.disabled = true; person.disabled = true;
     try {
@@ -125,6 +135,28 @@
   week.addEventListener('change', () => void readWeek());
   person.addEventListener('change', () => void readWeek());
   el('usage-history-refresh').addEventListener('click', () => void refresh());
+  collectTodayButton.addEventListener('click', async () => {
+    if (collectTodayButton.disabled) return;
+    collectTodayButton.disabled = true;
+    todayStatus.textContent = '正在按当前已保存归属读取今日用量并保存；不会发群，请勿重复点击。';
+    try {
+      const reply = await window.groupAdmin.dailyUsageCollectToday();
+      if (!reply.ok) throw Error(reply.message);
+      const result = reply.data;
+      if (result.failed) throw Error('平台读取未完成或归属在读取期间变化，原快照已保留；请检查采样状态，等待退避结束。');
+      if (result.skipped) {
+        const reasons = { busy: '已有用量任务正在执行，请稍后再试。', backoff: '上次读取失败，正在等待退避重试；原记录保留。',
+          scope: '请核对平台管理员授权与原目标群绑定。', 'authorization': '请先恢复平台管理员授权。',
+          'no-users': '没有已保存的归属账号，请先在“用户归属”保存。' };
+        todayStatus.textContent = reasons[result.skipped] || '本次未执行采样，请查看采样状态。';
+      } else if (result.saved?.length) {
+        todayStatus.textContent = '今日用量已采样并保存。新增账号可在所属人的当前周查看；未改历史完整日，也未发群。';
+        await refresh();
+      } else todayStatus.textContent = '本次没有保存新快照，请查看采样状态。';
+      await refreshCollectionStatus();
+    } catch (error) { todayStatus.textContent = `今日采样未完成：${error.message}`; }
+    finally { collectTodayButton.disabled = false; }
+  });
   async function exportHistory(scope) {
     if (exportPerson.disabled || exportAll.disabled) return;
     if (!catalog) { exportStatus.textContent = '请先读取本机历史目录。'; return; }
@@ -141,7 +173,7 @@
       });
       if (!reply.ok) throw Error(reply.message);
       exportStatus.textContent = reply.data.canceled ? '已取消导出，未写入文件。' :
-        `已导出 ${reply.data.fileName}：${reply.data.people} 位归属人、${reply.data.days} 天、${reply.data.rows} 行。请妥善保管含邮箱的文件。`;
+        `已导出 ${reply.data.fileName}：${reply.data.people} 位归属人、${reply.data.days} 个日期列、${reply.data.rows} 个账号行。请妥善保管含邮箱的文件。`;
     } catch (error) { exportStatus.textContent = `导出失败：${error.message}`; }
     finally { exportPerson.disabled = false; exportAll.disabled = false; }
   }
@@ -182,5 +214,13 @@
   window.addEventListener('admin-view-change', event => {
     if (event.detail.view === 'usage-history') { void refresh(); void showBackfillStatus(); void refreshCollectionStatus(); }
     else if (event.detail.previous === 'usage-history') { generation++; root.replaceChildren(); }
+  });
+  window.groupAdmin.onOwnershipChanged?.(() => {
+    if (!el('usage-history').hidden) void refresh();
+  });
+  window.addEventListener('ownership-view-usage', event => {
+    if (typeof event.detail?.name !== 'string') return;
+    requestedPerson = event.detail.name;
+    window.dispatchEvent(new CustomEvent('admin-navigate',{detail:{view:'usage-history'}}));
   });
 })();

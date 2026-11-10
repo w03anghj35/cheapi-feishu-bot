@@ -41,6 +41,16 @@ test('usage query audit is encrypted and distinguished from balance queries', t 
   const reopened = makeOwnershipQueryAudit(f.dir, safeStorage); reopened.load();
   assert.equal(reopened.list(1, GROUP)[0].kind, 'usage');
 });
+test('administrator all-profile usage audit survives reopen separately from member usage', t => {
+  const f = fixture(t); f.audit.load();
+  f.audit.append({ owner:1,groupId:GROUP,openId:ACTOR,actorName:'已核实飞书管理员',name:'全部归属人',
+    kind:'usage-all',status:'found',count:5,at:new Date().toISOString() });
+  const raw=fs.readFileSync(path.join(f.dir,'query-audit.journal'),'utf8');
+  assert.equal(raw.includes('usage-all')||raw.includes('全部归属人'),false);
+  const reopened=makeOwnershipQueryAudit(f.dir,safeStorage);reopened.load();
+  assert.equal(reopened.list(1,GROUP)[0].kind,'usage-all');
+  assert.equal(reopened.list(2,GROUP).length,0);
+});
 test('query result is withheld when audit append fails', async t => {
   const f = fixture(t); f.audit.load();
   let rows = [];

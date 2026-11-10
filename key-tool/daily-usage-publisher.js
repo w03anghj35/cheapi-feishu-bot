@@ -11,6 +11,8 @@ const ROTATE_MS = 10 * 24 * HOUR_MS;
 const BACKFILL_BUDGET_MS = 10 * 60_000;
 const DAY_MS = 24 * HOUR_MS;
 const DAILY_WINDOW_MS = 15 * 60_000;
+const MAX_UNFINISHED_DAYS_PER_TICK = 2;
+const UNFINISHED_BUDGET_MS = 120_000;
 const yesterday = day => new Date(Date.parse(`${day}T00:00:00Z`) - 24 * HOUR_MS).toISOString().slice(0, 10);
 const tomorrow = day => new Date(Date.parse(`${day}T00:00:00Z`) + DAY_MS).toISOString().slice(0, 10);
 const publishedToday = (card, day) => card?.phase === 'ready' && Number.isFinite(Date.parse(card.at)) &&
@@ -39,20 +41,24 @@ class DailyUsagePublisher {
   }
   scope() { const scope = this.getScope(); if (!scope) throw Error('平台管理员与目标群尚未就绪。'); return scope; }
   sameOwnership(fresh) {
-    const current = this.usage.ownership?.profiles?.();
+    const current = fresh?.day && this.usage.ownership?.profilesAt ?
+      this.usage.ownership.profilesAt(fresh.day) : this.usage.ownership?.profiles?.();
     return Array.isArray(current) && JSON.stringify(current) === JSON.stringify(fresh.rows.map(row => ({
       name: row.name, userIds: row.users.map(user => user.id)
     })));
   }
   state() {
     const scope = this.scope(), state = this.store.state(scope);
+    const today = beijingDay(this.now());
+    const pendingDays = Object.keys(state.snapshots).filter(day => day < today && !state.snapshots[day].final).sort();
+    const manualDays = pendingDays.filter(day => day < yesterday(today) && !this.sameOwnership(state.snapshots[day]));
     return { enabled: state.enabled, days: state.days, dailyTime: state.dailyTime,
       effectiveDay: state.effectiveDay,
       groupRef: createHash('sha256').update(scope.groupId).digest('hex').slice(0, 8),
       collection: { available: this.canCollect(scope), attemptAt: this.historyAttemptAt,
         busy: this.busy || this.usage.busy,
         retryAfter: this.historyRetryAfter > this.now() ? new Date(this.historyRetryAfter).toISOString() : null,
-        failure: this.historyFailure },
+        failure: this.historyFailure, pendingDays, manualDays },
       lastDay: Object.keys(state.snapshots).sort().at(-1) || null,
       cards: Object.entries(state.cards).map(([name, card]) => ({ name, phase: card.phase,
         action: card.action || null, at: card.at, attemptedAt: card.attemptedAt || card.at,
@@ -85,15 +91,20 @@ class DailyUsagePublisher {
   }
   historyWeek(input) {
     const scope = this.scope();
-    const names = this.usage.ownership?.profiles?.().map(row => row.name) || [];
-    return historyWeek(this.store.state(scope), input || {}, beijingDay(this.now()), names);
+    const profiles = this.usage.ownership?.profiles?.() || [];
+    const names = profiles.map(row => row.name);
+    const accounts = this.usage.ownership?.profileAccounts?.(input?.name) ||
+      profiles.find(row => row.name === input?.name)?.userIds.map(id => ({ id, email: null })) || [];
+    return historyWeek(this.store.state(scope), input || {}, beijingDay(this.now()), names, accounts,
+      this.usage.ownership?.datedProfiles?.() || []);
   }
   historyExport(input) {
     const scope = this.scope();
     const names = this.usage.ownership?.profiles?.().map(row => row.name) || [];
-    return exportRows(this.store.state(scope), input, beijingDay(this.now()), names);
+    return exportRows(this.store.state(scope), input, beijingDay(this.now()), names, this.usage.ownership?.datedProfiles?.() || []);
   }
-  async historyTick() {
+  async collectToday() { return this.historyTick({ todayOnly: true }); }
+  async historyTick({ todayOnly = false } = {}) {
     if (this.busy || this.usage.busy) return { skipped: 'busy' };
     if (this.now() < Math.max(this.retryAfter, this.historyRetryAfter)) return { skipped: 'backoff' };
     let scope;
@@ -102,27 +113,47 @@ class DailyUsagePublisher {
     let profiles;
     try { profiles = this.usage.ownership?.profiles?.(); }
     catch { return { skipped: 'scope' }; }
-    if (!Array.isArray(profiles) || !profiles.some(row => row.userIds?.length)) return { skipped: 'no-users' };
     const today = beijingDay(this.now()), previous = yesterday(today);
+    if (!Array.isArray(profiles) || (!profiles.some(row => row.userIds?.length) &&
+        !this.usage.ownership?.profilesAt?.(previous).some(row => row.userIds?.length))) return { skipped: 'no-users' };
     const state = this.store.state(scope);
-    const needsPrevious = !state.snapshots[previous]?.final;
+    const needsPrevious = !todayOnly && !state.snapshots[previous]?.final;
     const current = state.snapshots[today];
-    const needsToday = !current || this.now() - Date.parse(current.checkedAt) >= HOUR_MS;
-    if (!needsPrevious && !needsToday) return { skipped: 'not-due' };
+    // Membership changes invalidate today's sample even within the hourly interval.
+    // Closed-day snapshots retain their historical assignments and are never invalidated here.
+    const needsToday = todayOnly || !current || !this.sameOwnership(current) ||
+      this.now() - Date.parse(current.checkedAt) >= HOUR_MS;
+    // Only finish dates already present in this scope, never expand into unknown history.
+    // A changed assignment needs an explicit review rather than replacing old owners/accounts.
+    const unfinishedDays = todayOnly ? [] : Object.keys(state.snapshots).filter(day => day < previous &&
+      !state.snapshots[day].final && this.sameOwnership(state.snapshots[day])).sort().slice(0, MAX_UNFINISHED_DAYS_PER_TICK);
+    if (!needsPrevious && !needsToday && !unfinishedDays.length) return { skipped: 'not-due' };
     this.busy = true;
     this.historyAttemptAt = new Date(this.now()).toISOString();
     let stage = 'yesterday';
+    let unfinishedStartedAt = null;
     const saved = [];
     try {
-      for (const day of [needsPrevious ? previous : null, needsToday ? today : null].filter(Boolean)) {
-        stage = day === previous ? 'yesterday' : 'today';
+      for (const day of [needsPrevious ? previous : null, needsToday ? today : null, ...unfinishedDays].filter(Boolean)) {
+        const unfinished = day < previous;
+        stage = unfinished ? 'unfinished' : day === previous ? 'yesterday' : 'today';
+        if (beijingDay(this.now()) !== today) throw Error('day changed');
+        if (day < today && this.store.state(scope).snapshots[day]?.final) continue;
+        if (unfinished) {
+          unfinishedStartedAt ??= this.now();
+          if (this.now() - unfinishedStartedAt >= UNFINISHED_BUDGET_MS) break;
+          if (!this.sameOwnership(this.store.state(scope).snapshots[day])) throw Error('historical ownership changed');
+        }
         const result = await this.usage.read(day);
         const active = this.scope();
         if (!this.canCollect(active) || active.owner !== scope.owner || active.groupId !== scope.groupId ||
-            result.scope.owner !== scope.owner || result.scope.groupId !== scope.groupId)
+            result.scope.owner !== scope.owner || result.scope.groupId !== scope.groupId ||
+            result.day !== day || beijingDay(this.now()) !== today ||
+            (day < today && result.final !== true) || !this.sameOwnership(result) ||
+            JSON.stringify(this.usage.ownership.profiles()) !== JSON.stringify(profiles))
           throw Error('scope changed');
         this.store.append({ type: 'snapshot', scope, day, checkedAt: result.checkedAt,
-          final: result.final, ...(day === previous ? { source: 'backfill-current-ownership' } : {}),
+          final: result.final, ...(day < today ? { source: 'backfill-current-ownership' } : {}),
           rows: result.rows.map(row => ({ name: row.name,
             users: row.users.map(user => ({ id: user.id, email: user.email, cost: user.cost })) })) });
         saved.push(day);

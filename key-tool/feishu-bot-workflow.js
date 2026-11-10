@@ -46,13 +46,14 @@ function actorFromOpenId(openId) {
 }
 
 class FeishuBotWorkflow {
-  constructor({ getPolicy, service, registrationService = null, groupSettingsService = null, userOwnership = null, getMemberUsageQuery = () => null, resolveActorName = null, sendText, sendCard = null, connection = null, now = () => Date.now(), random = () => randomBytes(12).toString('base64url'), onCandidate = () => {} }) {
+  constructor({ getPolicy, service, registrationService = null, groupSettingsService = null, userOwnership = null, getMemberUsageQuery = () => null, resolveActorName = null, sendText, sendCard = null, connection = null, now = () => Date.now(), random = () => randomBytes(12).toString('base64url'), onCandidate = () => {}, usageCardThrottle = () => new Promise(resolve => setTimeout(resolve, 250)) }) {
     this.getPolicy = getPolicy;
     this.service = service;
     this.registrationService = registrationService;
     this.groupSettingsService = groupSettingsService;
     this.userOwnership = userOwnership;
     this.getMemberUsageQuery = getMemberUsageQuery;
+    this.usageCardThrottle = usageCardThrottle;
     this.resolveActorName = resolveActorName;
     this.sendText = sendText;
     this.sendCard = sendCard;
@@ -344,21 +345,51 @@ class FeishuBotWorkflow {
 
   async startMemberUsage(openId, session, policy) {
     const service = this.getMemberUsageQuery?.();
-    if (!service || !this.sendCard) {
+    const allProfiles = openId === policy.ownerOpenId;
+    if (!service || !this.sendCard || (allProfiles && (typeof service.queryAll !== 'function' ||
+        typeof service.sameAdminBinding !== 'function'))) {
       await this.send('open_id', openId, '用户用量暂不可用，请联系管理员检查本机用量服务。');
       this.discardSession(openId);
       return { status: 'feature-unavailable', featureId: 'user-usage' };
     }
+    if (this.policy() !== policy || this.sessions.get(openId) !== session ||
+        session.groupId !== policy.groupId || session.expiresAt <= this.now()) return { status: 'policy-changed' };
     if (this.memberUsageTask) {
       await this.send('open_id', openId, '已有用户用量正在读取，请稍后从原群重新 @机器人查询。');
       this.discardSession(openId);
       return { status: 'user-usage-busy' };
     }
     const generation = this.memberUsageGeneration;
+    const expiresAt = session.expiresAt;
     this.discardSession(openId);
-    const guard = () => this.memberUsageGeneration === generation && this.policy() === policy;
+    const guard = () => this.memberUsageGeneration === generation && this.policy() === policy &&
+      this.now() < expiresAt && (!allProfiles || this.policy()?.ownerOpenId === openId);
     const run = (async () => {
       try {
+        if (allProfiles) {
+          if (!await this.send('open_id', openId, '正在核验管理员身份并读取全部归属人的用量。每人一张表，只发到您的私聊，请勿重复点击。')) return;
+          if (!guard()) return;
+          const result = await service.queryAll(openId, guard);
+          if (!guard() || !service.sameAdminBinding(openId, result.binding)) return;
+          if (!result.cards.length) {
+            await this.send('open_id', openId, '暂无已保存且包含平台账号的归属档案，没有生成用量卡片。');
+            return;
+          }
+          for (const [index, row] of result.cards.entries()) {
+            await this.usageCardThrottle();
+            if (!guard() || !service.sameAdminBinding(openId, result.binding)) return;
+            try {
+              const receipt = await this.sendCard({ receiveIdType: 'open_id', receiveId: openId, card: row.card });
+              if (typeof receipt?.messageId !== 'string' || !receipt.messageId) throw Error('missing private receipt');
+            } catch {
+              // Stop the batch at the first uncertain receipt; never repeat any previous cards.
+              if (guard()) await this.send('open_id', openId,
+                `第 ${index + 1} 张用量卡片发送结果未确认，后续卡片已停止；请先核对本私聊，不要连续重试。`);
+              return;
+            }
+          }
+          return;
+        }
         const result = await service.query(openId, guard);
         if (!guard()) return;
         if (result.pending) {

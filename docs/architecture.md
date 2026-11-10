@@ -2,10 +2,14 @@
 
 ## 桌面与业务
 
+- `ownership-dates.js`：可选归属生效日期链的校验、同日更新、按日选择与历史快照只读投影；日期与客户名册在原加密归属快照内一次保存，客户转移不拆两次写入。`admin-user-ownership.js` 的可视表经专用管理员 IPC 调用 `changeClient`，使用归属版本摘要拒绝过期表单；`daily-usage-history.js`、导出与采样共同使用日期规则，旧用量事件不改写。
+
 - `group-settings-service.js`：管理员分组目录、精确用户定位、配置快照、独立修改账本、严格PUT与回读；`feishu-group-settings.js`：管理员分页倍率卡片与表单校验；`admin-group-settings.js`：独立别名发布与待核对记录入口。详见 [接口契约](group-settings.md)。
 - `user-ownership.js`：按平台管理员与飞书目标群隔离的姓名档案、成员登记及管理员确认的稳定身份→档案绑定，本机加密追加记录兼容旧身份归属，追加完整修改快照与时间；只读分页查询平台用户、按余额排序。`ownership-draft.js` 加密暂存未保存表单并按范围恢复，`ownership-query-audit.js` 加密记录每次已绑定成员查询，日志故障时拒绝展示资料。查询要求目标群 @进入、私聊点击功能，未绑定者仅得到自己的显示名与待核对提示；已绑定者一键查归属，不接受自报姓名作为权限。`admin-user-ownership.js` 为管理员姓名建档、身份核对与绑定入口。见 [用户归属说明](user-ownership.md)。
 - `daily-usage.js` 固定按用户 ID/北京时间自然日并发上限 2 路只读查询平台用户实付；`daily-usage-card.js` 生成为每归属人最近 3 天的纯文本分栏卡片，`daily-usage-store.js` 独立加密追加快照、群卡定时时刻、尝试/消息 ID。`daily-usage-publisher.js` 将本机约每小时历史采样与管理员设定的每日群卡发布分开；旧启用配置无定时时刻则不群发，结果不明停发。`member-usage-query.js` 为已绑定成员的本人实时私聊用量读取，历史仅用已固定快照；身份/归属在读数前后复核，加密查询审计区分余额与用量。`admin-daily-usage.js` 为管理员预览/设时/暂停入口；`daily-usage-history.js` 与 `admin-usage-history.js` 为历史周表与手动补采，`daily-usage-export.js` 从本机历史快照生成 Excel。群发布、私聊查询与原令牌/注册账本隔离。见[每日用量说明](daily-usage.md)。
+- `daily-usage-export.js` 从当前管理员/目标群范围内的日快照构造横向 Excel 日表：归属姓名与账号固定在左、日期按选择范围横向展开，逐归属日合计和全部归属合计只累加已有金额。缺记录仍为空，真实零保持数字；日期状态另行标注，保留按日期归属投影和受控大小上限。不发起平台查询或飞书消息。详见[每日用量说明](daily-usage.md)。
 - `daily-usage-review.js` 为管理员主进程的单笔人工核对流程：默认取消的系统确认、前后两次管理员和群范围核验；`daily-usage-store.js` 以一个加密事件同时保存人工未见声明并关闭群发布。`admin-daily-usage.js` 只展示白名单脱敏失败分类和核对入口，旧记录不补造错误码；此流程不调用飞书发送 API。见[每日用量说明](daily-usage.md)。
+- `MemberUsageQuery.queryAll` 仅接受主进程从已确认飞书管理员身份投影的范围；平台管理员核验后读取全部当前归属，按完整归属修订/北京日期再次核对并生成私聊卡片。`FeishuBotWorkflow` 从真实发送者决定本人/管理员路径，菜单文本不能决定权限；管理员批次逐张私发、每张前复核，回执不明停后续。`ownership-query-audit.js` 增加 `usage-all` 加密查询类别，旧 `balance/usage` 兼容；查询成功与投递成功分开表达。
 - `account-schedule.js`：管理员账号调度开关的一次性、双步骤本机计划；加密追加日志先记录尝试，再调用固定 `schedulable` 接口并回读。`admin-account-schedule.js` 为第九侧栏的账号列表、顺序和北京时间表单。见 [账号调度说明](account-schedule.md)。
 - `key-tool/main.js`：业务 Electron 主入口、平台授权、同源请求、IPC和飞书业务连接。
 - `admin.html/admin-renderer.js/admin-preload.js`：管理员分组、记录、飞书策略与绑定入口。

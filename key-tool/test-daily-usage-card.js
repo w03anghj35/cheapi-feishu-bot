@@ -36,3 +36,11 @@ test('retired card contains no old account details', () => {
   assert.equal(card.config.enable_forward, false);
   assert.equal(JSON.stringify(card).includes('a@example.invalid'), false);
 });
+test('an old unfinished day is labelled pending instead of today in progress', () => {
+  const card = dailyUsageCard({ ...input, checkedAt: '2026-11-09T02:00:00Z' });
+  const text = JSON.stringify(card);
+  assert.ok(text.includes('11-06 待补齐'));
+  assert.equal(text.includes('11-06 *'), false);
+  assert.ok(text.includes('$3.5000'));
+  assert.ok(text.includes('历史待补齐日金额仅为已记录小计'));
+});

@@ -8,7 +8,7 @@ const FEATURES = Object.freeze([
   Object.freeze({ id: 'token', label: '令牌创建', aliases: Object.freeze(['令牌创建', '创建令牌', '申请令牌', '发送令牌', '领取令牌']) }),
   Object.freeze({ id: 'group-settings', label: '分组设置', adminOnly: true, aliases: Object.freeze(['分组设置', '设置倍率']) }),
   Object.freeze({ id: 'user-query', label: '用户查询', aliases: Object.freeze(['用户查询', '查询用户', '我的用户']) }),
-  Object.freeze({ id: 'user-usage', label: '用户用量', aliases: Object.freeze(['用户用量', '我的用量', '查询用量']) })
+  Object.freeze({ id: 'user-usage', label: '用户用量', aliases: Object.freeze(['用户用量', '我的用量', '查询用量', '用量查询', '用户用量（全部归属）']) })
 ]);
 
 function featureById(id) { return FEATURES.find(feature => feature.id === id) || null; }
@@ -19,5 +19,6 @@ function featureByText(text) {
 }
 const isMenu = text => typeof text === 'string' && /^\/?(?:菜单|功能|帮助|开始)$/.test(text);
 
-const availableFeatures = isAdmin => FEATURES.filter(f => !f.adminOnly || isAdmin === true);
+const availableFeatures = isAdmin => FEATURES.filter(f => !f.adminOnly || isAdmin === true)
+  .map(f => isAdmin === true && f.id === 'user-usage' ? { ...f, label: '用户用量（全部归属）' } : f);
 module.exports = { FEATURES, featureById, featureByText, isMenu, availableFeatures };

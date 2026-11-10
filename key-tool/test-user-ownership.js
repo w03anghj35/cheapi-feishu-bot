@@ -84,6 +84,16 @@ test('name-first update, invalid target and changed users fail safely', async ()
   f.setUsers([{ id: 1, username: '其他', email: 'other@example.invalid', balance: 1, role: 'user', status: 'active' }]);
   await assert.rejects(f.ownership.query(ALICE), { code: 'SCHEMA' });
 });
+
+test('account labels are local projections scoped to the exact profile and administrator', async () => {
+  const f = setup();
+  await f.ownership.assignName({ name: '甲', userIds: [1] });
+  await f.ownership.assignName({ name: '乙', userIds: [2] });
+  assert.deepEqual(f.ownership.profileAccounts('甲'), [{ id: 1, email: 'high@example.invalid' }]);
+  assert.deepEqual(f.ownership.profileAccounts('不存在'), []);
+  f.setOwner(2); assert.deepEqual(f.ownership.profileAccounts('甲'), []);
+  f.setOwner(1); f.setGroup('oc_other_12345678'); assert.deepEqual(f.ownership.profileAccounts('甲'), []);
+});
 test('bound one-click query refuses a changed profile during a slow balance read', async () => {
   const f = setup(); await f.ownership.assignName({ name: '陈梦', userIds: [1] });
   f.ownership.claim(ALICE, '飞书成员');

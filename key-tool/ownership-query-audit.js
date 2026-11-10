@@ -15,7 +15,7 @@ function validate(row) {
       typeof row.name !== 'string' || !row.name.trim() || row.name.length > 100 ||
       /[\x00-\x1f\x7f]/.test(row.name) ||
       !['found','not-found','error'].includes(row.status) ||
-      (row.kind !== undefined && !['balance','usage'].includes(row.kind)) ||
+      (row.kind !== undefined && !['balance','usage','usage-all'].includes(row.kind)) ||
       !Number.isFinite(Date.parse(row.at)) ||
       !Number.isSafeInteger(row.count) || row.count < 0 || row.count > 2000)
     throw new Error('invalid query audit');

@@ -14,7 +14,7 @@ const { makeDailyUsageStore, validDailyTime } = require('./daily-usage-store');
 const { DailyUsagePublisher } = require('./daily-usage-publisher');
 const { MemberUsageQuery } = require('./member-usage-query');
 const { reviewAbsentAction } = require('./daily-usage-review');
-const { exportWorkbook } = require('./daily-usage-export');
+const { exportWorkbook, wideLayout } = require('./daily-usage-export');
 const { AccountSchedule, makeAccountScheduleStore } = require('./account-schedule');
 const { makeCatalogStore } = require('./group-catalog');
 const { makeSessionStore } = require('./session-store');
@@ -72,6 +72,16 @@ function publishRecords() {
 }
 function publishFeishuState() {
   if (adminUI && !adminUI.isDestroyed() && feishuWorkflow) adminUI.webContents.send('key-tool:feishu-state', feishuAdminState());
+}
+function publishOwnershipChange() {
+  if (adminUI && !adminUI.isDestroyed()) adminUI.webContents.send('key-tool:ownership-changed');
+}
+function collectChangedOwnership() {
+  publishOwnershipChange();
+  if (!dailyUsagePublisher || closing) return;
+  // Saving an assignment succeeds independently of a platform stats outage.
+  // Failed/busy collection remains visible and the existing timer retries safely.
+  void dailyUsagePublisher.collectToday().then(publishOwnershipChange, publishOwnershipChange);
 }
 function feishuAdminState() {
   const workflow = feishuWorkflow?.state() || {};
@@ -485,7 +495,12 @@ app.whenReady().then(async () => {
   } catch { dailyUsagePublisher = null; } // A damaged daily usage log cannot affect registration or tokens.
   if (dailyUsagePublisher) try {
     memberUsageQuery = new MemberUsageQuery({ ownership: userOwnership,
-      request: testMode ? fixture.request : request, snapshotStore: dailyUsagePublisher.store });
+      request: testMode ? fixture.request : request, snapshotStore: dailyUsagePublisher.store,
+      getAdminScope: openId => {
+        const policy = feishuWorkflow?.policy();
+        return !closing && policy?.ownerOpenId === openId && (testMode || auth?.phase === 'ready') ?
+          { owner: policy.platformOwnerId, groupId: policy.groupId } : null;
+      } });
   } catch { memberUsageQuery = null; } // Private query failure cannot affect group publishing.
   setInterval(() => feishuWorkflow.pruneTransientState(), 30000).unref();
   if (!testMode) feishuReconnect = new FeishuReconnect({ connection: feishuConnection, ensureReady: async () => {
@@ -641,12 +656,23 @@ app.whenReady().then(async () => {
   register('admin-user-ownership-save', async input => {
     await assertFeishuAdmin();
     if (!userOwnership) throw new ToolError('STORAGE', '用户归属配置不可用，请保留原件。');
-    return userOwnership.assign(input);
+    const result = await userOwnership.assign(input);
+    collectChangedOwnership();
+    return result;
   }, true);
   register('admin-user-ownership-save-name', async input => {
     await assertFeishuAdmin();
     if (!userOwnership) throw new ToolError('STORAGE', '用户归属配置不可用，请保留原件。');
-    return ownershipNames(await userOwnership.assignName(input));
+    const result = ownershipNames(await userOwnership.assignName(input));
+    collectChangedOwnership();
+    return result;
+  }, true);
+  register('admin-user-ownership-client-change', async input => {
+    await assertFeishuAdmin();
+    if (!userOwnership) throw new ToolError('STORAGE', '用户归属配置不可用，请保留原件。');
+    const result = ownershipNames(await userOwnership.changeClient(input));
+    collectChangedOwnership();
+    return result;
   }, true);
   register('admin-user-ownership-link', async input => {
     await assertFeishuAdmin();
@@ -687,6 +713,10 @@ app.whenReady().then(async () => {
     await assertFeishuAdmin();
     return usageHistory().historyCatalog();
   }, true);
+  register('admin-daily-usage-collect-today', async () => {
+    await assertFeishuAdmin();
+    return usageHistory().collectToday();
+  }, true);
   register('admin-daily-usage-history-week', async input => {
     await assertFeishuAdmin();
     return usageHistory().historyWeek(input);
@@ -718,7 +748,7 @@ app.whenReady().then(async () => {
       if (handle) await handle.close().catch(() => {});
       await fs.unlink(temporary).catch(() => {});
     }
-    return { canceled: false, fileName: path.basename(chosen.filePath), rows: fresh.rows.length,
+    return { canceled: false, fileName: path.basename(chosen.filePath), rows: wideLayout(fresh).accountRows,
       people: fresh.people, days: fresh.count };
   }, true);
   register('admin-daily-usage-backfill-status', async () => {

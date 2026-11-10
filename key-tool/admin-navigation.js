@@ -36,5 +36,6 @@
     if (focus) { document.getElementById('admin-view-title').focus({preventScroll:true}); window.scrollTo(0,0); }
   }
   for (const button of buttons) button.addEventListener('click', () => show(button.dataset.adminTarget));
+  window.addEventListener('admin-navigate', event => { if (event.detail?.view === 'usage-history') show('usage-history'); });
   show(current, false);
 })();
