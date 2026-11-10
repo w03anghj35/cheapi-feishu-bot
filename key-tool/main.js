@@ -19,6 +19,7 @@ const { AccountSchedule, makeAccountScheduleStore } = require('./account-schedul
 const { makeCatalogStore } = require('./group-catalog');
 const { makeSessionStore } = require('./session-store');
 const { AdminSession } = require('./auth-session');
+const { isTrustedEntryDocument } = require('./entry-document');
 const { makeFeishuStore, validateCredentials } = require('./feishu-store');
 const { makeFeishuPolicyStore, emptyPolicy, validatePolicy } = require('./feishu-policy-store');
 const { FeishuConnection } = require('./feishu-connection');
@@ -292,7 +293,7 @@ function register(name, action, adminOnly = false) {
   ipcMain.handle('key-tool:' + name, async (event, ...args) => {
     const target = adminOnly ? adminUI : ui;
     if (!target || target.isDestroyed() || event.sender !== target.webContents || event.senderFrame !== target.webContents.mainFrame ||
-        event.senderFrame.url !== (adminOnly ? adminURL : uiURL)) {
+        !isTrustedEntryDocument(event.senderFrame.url, adminOnly ? adminURL : uiURL)) {
       return { ok: false, code: 'DENIED', message: '拒绝非工具页面调用。' };
     }
     let operationId, logWarning;

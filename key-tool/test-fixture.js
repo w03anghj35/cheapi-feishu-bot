@@ -120,6 +120,10 @@ async function verifyUI({ app, ui, fixture, registrationService, tokenService, u
     // The private handler map is used only by this isolated test, never production logic.
     const customerEvent = { sender: ui.webContents, senderFrame: ui.webContents.mainFrame };
     const adminEvent = { sender: admin.webContents, senderFrame: admin.webContents.mainFrame };
+    await adminRun('document.querySelector(".brand").click()');
+    await adminWait('location.hash === "#main"');
+    assert.equal((await adminRun('window.groupAdmin.authState()')).ok, true,
+      'same-file anchor must not disable the admin IPC bridge');
     for (const name of ['admin-state', 'admin-refresh', 'admin-save-groups', 'admin-auth-state', 'admin-login', 'admin-complete-login',
       'admin-records', 'admin-record', 'admin-secret', 'admin-copy-secret', 'admin-recover-authorization',
       'admin-feishu-save-credentials', 'admin-feishu-state', 'admin-registration-records', 'admin-registration-review',
