@@ -11,7 +11,10 @@
     'channel-access': ['渠道授权', '预先配置聊天身份可查看的渠道，并预览只读结果。'],
     'user-ownership': ['用户归属', '把平台用户分配给核对过的飞书成员，供其在私聊查询当前余额。'],
     'account-management': ['账号管理', '为两个平台账号安排一次性调度开关，按明确顺序依次执行。'],
-    'usage-history': ['用量统计', '按月份、周与归属人查看本机已采集用量，或按日期导出 Excel。']
+    'usage-history': ['用量统计', '按月份、周与归属人查看本机已采集用量，或按日期导出 Excel。'],
+    'recharge-query': ['充值查询', '逐笔查询平台充值记录，区分管理员充值、其他来源和待确认的操作人。'],
+    'bulk-group-rates': ['批量分组调价', '只读核对已授权分组及各用户当前倍率，预览后按固定数值批量上调或下调。'],
+    'user-balance': ['用户余额', '逐个查看平台用户余额，汇总排除管理员后的普通用户正余额。']
   };
   let current = 'configuration';
   const buttons = [...document.querySelectorAll('[data-admin-target]')];

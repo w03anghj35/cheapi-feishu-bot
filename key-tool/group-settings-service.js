@@ -76,9 +76,10 @@ function ledgerRows(rows) {
   return rows;
 }
 class GroupSettingsService {
-  constructor({ request, catalog, store, getOwner, onProgress = () => {} }) {
+  constructor({ request, catalog, store, getOwner, onProgress = () => {}, otherBlocked = () => false }) {
     this.request = request; this.catalogStore = catalog; this.store = store; this.getOwner = getOwner;
     this.onProgress = onProgress;
+    this.otherBlocked = otherBlocked;
     this.catalog = validateCatalog(catalog.load()); this.records = ledgerRows(store.load());
     this.groups = []; this.owner = null; this.busy = false; this.storageFault = false;
     for (const row of this.records) if (row.state === 'pending') row.state = 'unknown';
@@ -184,6 +185,7 @@ class GroupSettingsService {
   patch(requestId, state) { this.save(this.records.map(r => r.requestId === requestId ? { ...r, state } : r)); }
   async apply({ requestId, preview, changes }, context) {
     if (this.busy || this.storageFault) fail('BUSY', '分组设置忙碌或存储异常。');
+    if (this.otherBlocked()) fail('BUSY', '批量倍率调整正在处理或有结果待核对，请先处理。');
     if (this.records.some(r => r.requestId === requestId)) fail('DUPLICATE', '该操作已有记录，不能重复提交。');
     if (this.records.some(r => ['pending','unknown'].includes(r.state))) fail('UNKNOWN', '有分组设置结果待核对，请先在本机处理。');
     if (!/^[a-f0-9-]{36}$/.test(requestId) || !preview || !id(preview.owner) || !id(preview.user?.id)) fail('INPUT', '操作参数无效。');
@@ -209,7 +211,7 @@ class GroupSettingsService {
       this.save([...this.records, { kind: 'group-settings', requestId, owner, targetId: fresh.user.id, state: 'pending',
         body: { userId: fresh.user.id, changes: structuredClone(changes) }, before: config(fresh.user), expected, at: new Date().toISOString() }]);
       pending = true;
-      if (context.guard() !== true || this.getOwner() !== owner) fail('POLICY', '身份或会话已变化，未提交。');
+      if (context.guard() !== true || this.getOwner() !== owner || this.otherBlocked()) fail('POLICY', '身份、会话或批量调价状态已变化，未提交。');
       attempted = true;
       await this.request('PUT', `/admin/users/${fresh.user.id}`, body, { owner, guard: context.guard, groupSettings: true });
       const actual = userConfig(await this.request('GET', `/admin/users/${fresh.user.id}`), fresh.user.id);

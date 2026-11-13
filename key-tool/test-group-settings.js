@@ -9,7 +9,7 @@ const { makeDiskStore } = require('./disk-store');
 const { makeCatalogStore } = require('./group-catalog');
 const REQUEST = '11111111-1111-4111-8111-111111111111';
 async function setup(options = {}) {
-  let owner = 1, role = 'admin', failed = null, changed = false, mismatch = false, calls = [], saved = [], names = [], failStore = false;
+  let owner = 1, role = 'admin', failed = null, changed = false, mismatch = false, calls = [], saved = [], names = [], failStore = false, otherBlocked = false;
   let user = { id: 8, email: 'fixture@example.invalid', username: '虚构用户', role: 'user', status: 'active',
     allowed_groups: [99], restrict_public_groups: false, group_rates: { 99: 1.7 } };
   let groups = [
@@ -36,14 +36,15 @@ async function setup(options = {}) {
   };
   const catalog = options.catalog || { load: () => [], save: rows => { names = structuredClone(rows); } };
   const store = options.store || { load: () => [], save: rows => { if (failStore) throw new Error('fixture disk failure'); saved.push(structuredClone(rows)); } };
-  const service = new GroupSettingsService({ request, catalog, store, getOwner: () => owner });
+  const service = new GroupSettingsService({ request, catalog, store, getOwner: () => owner,
+    otherBlocked: () => otherBlocked });
   await service.refresh(); await service.saveNames({ owner: 1, items: [{ id: 7, name: '专属别名' }, { id: 9, name: '公开别名' }] });
   const preview = () => service.findUser('8', () => true);
   const apply = async (p, changes = [{ groupId: 7, allowed: true, rate: 0.8 }], guard = () => true) => service.apply({ requestId: REQUEST, preview: p, changes }, { guard });
   return { service, preview, apply, request, calls, saved, getUser: () => user, setUser: v => { user = { ...user, ...v }; },
     setGroups: v => { groups = v; }, groups: () => groups, setOwner: v => { owner = v; }, setRole: v => { role = v; },
     setFail: v => { failed = v; }, mismatch: () => { mismatch = true; }, failStore: () => { failStore = true; }, names: () => names,
-    changedAfterPut: () => { changed = true; } };
+    changedAfterPut: () => { changed = true; }, setOtherBlocked: value => { otherBlocked = value; } };
 }
 test('catalog includes private groups, hides unnamed groups, and never edits platform on publish', async () => {
   const f = await setup(); const p = await f.preview();
@@ -63,6 +64,14 @@ test('one confirmed update grants private group and rate, preserving unrelated r
   assert.equal(f.calls.filter(c => c.method === 'PUT').length, 1);
   await assert.rejects(f.apply(p), { code: 'DUPLICATE' });
   assert.equal(f.calls.filter(c => c.method === 'PUT').length, 1);
+});
+test('single-user settings cannot race with a running or unresolved bulk rate change', async () => {
+  const f = await setup(); const preview = await f.preview();
+  f.setOtherBlocked(true);
+  await assert.rejects(f.apply(preview), { code: 'BUSY' });
+  assert.equal(f.calls.some(call => call.method === 'PUT'), false);
+  f.setOtherBlocked(false);
+  assert.equal((await f.apply(preview)).userId, 8);
 });
 test('inherit default uses null, revoke only selected group, restricted public membership preserved', async () => {
   const f = await setup(); f.setUser({ allowed_groups: [7,9,99], restrict_public_groups: true, group_rates: { 7: 0.8,99:1.7 } });

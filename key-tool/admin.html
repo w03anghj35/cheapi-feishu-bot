@@ -15,6 +15,9 @@
 <button type="button" data-admin-target="account-management"><span>09</span>账号管理</button>
 <button type="button" data-admin-target="usage-history"><span>10</span>用量统计</button>
 <button type="button" data-admin-target="channel-access"><span>11</span>渠道授权</button>
+<button type="button" data-admin-target="recharge-query"><span>12</span>充值查询</button>
+<button type="button" data-admin-target="bulk-group-rates"><span>13</span>批量分组调价</button>
+<button type="button" data-admin-target="user-balance"><span>14</span>用户余额</button>
 </nav><p class="sidebar-note">配置按功能独立管理<br>切换栏目保留表单草稿</p></aside>
 <main id="main"><p class="eyebrow">CHEAPI / 管理工作台</p><h1 id="admin-view-title" tabindex="-1">管理配置</h1><p id="admin-view-description" class="subtitle">管理平台授权、飞书连接、管理员与目标群绑定。</p>
 <section class="auth-card" data-admin-view="configuration" aria-labelledby="auth-title"><div><p class="eyebrow">LOCAL / ENCRYPTED</p><h2 id="auth-title">管理员授权</h2><p id="auth-status" role="status" aria-live="polite">正在检查本机授权…</p><p id="auth-meta" class="muted"></p></div>
@@ -52,13 +55,37 @@
 <p id="settings-notice" role="status" aria-live="polite">请先完成平台管理员授权，再读取分组。</p>
 <form id="settings-form"><div id="settings-rows"></div><div class="settings-save-bar"><button id="settings-save" class="dark" disabled>保存并发布倍率配置分组</button><p id="settings-save-status" role="status" aria-live="polite">请先读取分组，再填写名称并发布。</p></div></form>
 <h3>分组设置记录</h3><p class="hint">最近100条当前管理员的操作。结果未知时仅回读，不自动重发；先到平台按用户ID核对，再决定是否人工解除保护。</p><button id="settings-records-refresh" type="button">刷新分组设置记录</button><div id="settings-records"></div></section>
+<section id="bulk-group-rates" class="history" data-admin-view="bulk-group-rates" hidden aria-labelledby="bulk-group-rates-title">
+<div class="section-title"><h2 id="bulk-group-rates-title">批量分组调价 · 管理员专用</h2><button id="bulk-rates-refresh" type="button">只读查询当前分组与用户倍率</button></div>
+<p class="hint">显示平台全部启用的标准分组，以及各用户明确勾选分组的当前倍率；未设置专属倍率时会标注分组默认倍率。查询、搜索与勾选不会修改价格。未限制的公开组虽可能可用，但没有明确勾选的组不参加批量调整。</p>
+<p id="bulk-rates-notice" role="status" aria-live="polite">请先只读查询当前配置。</p>
+<h3>选择要调整的分组</h3><div id="bulk-rates-group-list" class="bulk-rates-group-list"></div>
+<h3>选择用户</h3><label>关键字查找用户（用户名、邮箱或 ID）<input id="bulk-rates-user-search" type="search" maxlength="200" placeholder="筛选后可取消指定用户的勾选"></label>
+<button id="bulk-rates-select-all" type="button" class="bulk-rates-select-all">全选已加载的全部普通用户（不受当前搜索过滤影响）</button>
+<div class="bulk-rates-import"><button id="bulk-rates-import" type="button" disabled>读取文档识别邮箱</button><p class="hint">支持 TXT、CSV、XLSX、DOCX、PDF（含扫描版）、PNG/JPG；旧版 DOC/XLS 请先转换。图片识别可能有误，识别结果须逐项核对后才改变勾选，不会修改客户价格。</p>
+<p id="bulk-rates-import-status" role="status" aria-live="polite">请先读取当前用户目录，再选择名单文件。</p>
+<div id="bulk-rates-import-preview" class="bulk-rates-import-preview" hidden></div>
+<div class="bulk-rates-import-actions"><button id="bulk-rates-import-select" type="button" disabled>勾选文档中的用户</button><button id="bulk-rates-import-deselect" type="button" disabled>取消勾选文档中的用户</button></div></div>
+<p id="bulk-rates-selection-summary" class="hint" role="status"></p><div id="bulk-rates-user-list" class="bulk-rates-user-list"></div>
+<div class="bulk-rates-controls"><label>调整方向<select id="bulk-rates-direction"><option value="add">上调 ＋</option><option value="subtract">下调 －</option></select></label><label>统一调整幅度<input id="bulk-rates-amount" type="text" inputmode="decimal" placeholder="例如 0.2" autocomplete="off"></label><button id="bulk-rates-preview" type="button" disabled>预览每位用户的新倍率</button></div>
+<p class="hint">例如当前 1.8，选择上调并填写 0.2，预览应为 2.0。没有所选分组的用户跳过；不会为用户勾选、解锁或新增分组。下调不得低于平台允许的最低倍率。</p>
+<div id="bulk-rates-preview-list" class="bulk-rates-preview-list" aria-label="批量倍率调整预览"></div>
+<div class="bulk-rates-action"><button id="bulk-rates-commit" class="dark" type="button" disabled>核对后提交调整</button><p id="bulk-rates-result" role="status" aria-live="polite">尚未预览，不会提交任何修改。</p></div>
+<h3>批量调价记录与结果待核对</h3><p class="hint">每位用户在发送前留下独立加密尝试记录。结果不明会停止后续用户；仅能只读回读核对，不自动重发，也不会自动回滚已成功用户。</p>
+<button id="bulk-rates-records-refresh" type="button">读取最近调价记录</button><p id="bulk-rates-records-status" role="status" aria-live="polite"></p><div id="bulk-rates-records"></div>
+</section>
 <section class="history" data-admin-view="operation-log" hidden aria-labelledby="operation-log-title"><div class="section-title"><h2 id="operation-log-title">操作日志</h2><button id="operation-log-refresh" type="button">刷新日志</button></div><p class="hint">记录本机管理员的读取、保存、授权、连接和核对操作。日志从本版本启用后开始记录；不包含密码、密钥、邮箱、分组名称或接口响应原文。连接操作完成只代表操作已执行，在线状态以管理配置页为准；业务结果以对应账本为准。</p>
 <div class="operation-log-filters"><label>结果<select id="operation-log-filter"><option value="all">全部</option><option value="failure">失败</option><option value="running">处理中</option><option value="success">完成</option><option value="interrupted">中断待核对</option></select></label><label>检索操作或编号<input id="operation-log-search" type="search" maxlength="100" placeholder="例如：发布倍率分组 / INPUT / 操作编号"></label></div>
 <section class="local-record-table"><h3>项目内创建记录表</h3><p class="hint">“本机数据”文件夹自动保存CSV明细与变化轨迹，不包含密码或完整密钥。Excel表格快照需另行更新；以CSV更新时间和原业务账本为准。不要将整个文件夹上传或分享。</p><p id="record-table-status" role="status"></p><button id="record-table-sync" type="button">立即更新记录表</button><button id="record-table-open" type="button">打开本机数据文件夹</button></section>
 <p id="operation-log-notice" role="status" aria-live="polite"></p><div id="operation-log-rows"></div></section>
 <section id="channel-monitor" class="history" data-admin-view="channel-monitor" hidden aria-labelledby="channel-monitor-title">
 <div class="section-title"><h2 id="channel-monitor-title">渠道监控</h2><button id="channel-monitor-refresh" type="button">刷新显示状态</button></div>
-<p id="channel-monitor-notice" role="status" aria-live="polite">正在读取渠道状态…</p><div id="channel-monitor-rows" class="channel-monitor-grid"></div>
+  <p id="channel-monitor-notice" role="status" aria-live="polite">正在读取渠道状态…</p><div id="channel-monitor-rows" class="channel-monitor-grid"></div>
+  <section class="channel-converted-summary" aria-labelledby="channel-converted-title">
+    <h3 id="channel-converted-title">渠道总余额（折算人民币）</h3>
+    <strong id="channel-converted-total">—</strong>
+    <p id="channel-converted-status" role="status">请先为五个渠道分别填写倍率；全部本次余额有效时才显示合计。</p>
+  </section>
 <details class="channel-alert-settings"><summary>低余额邮件提醒设置</summary>
 <p class="hint">五个渠道分别按本站原单位与您设置的阈值比较；只有本次金额低于阈值才触发低余额邮件，每渠道每收件人同一低余额区间仅提醒一次。每日汇总独立于阈值，到点给全部收件人各发一封；未取得有效金额会注明，不使用旧值。发送结果不明不自动重试。</p>
 <label>QQ 发件邮箱<input id="channel-alert-sender" type="email" autocomplete="off" maxlength="254" placeholder="例如：您的QQ邮箱"></label>
@@ -71,7 +98,12 @@
 <div class="channel-buttons"><label for="channel-alert-test-scope">测试收件范围</label><select id="channel-alert-test-scope"><option value="all">全部已配置收件邮箱（各一封）</option><option value="first">仅第一个收件邮箱</option></select><button id="channel-alert-test" type="button">发送一次测试邮件</button></div>
 <p class="hint">测试邮件列出五个渠道的网址和最近一次成功读取的金额与时间；未取得有效金额的渠道会如实注明，不会伪造余额。测试不会改变正式低余额提醒的去重状态。</p>
 <p id="channel-alert-status" role="status" aria-live="polite"></p></details>
-<details class="channel-monitor-help"><summary>监控与登录说明</summary><p class="hint">五个渠道分别显示金额，不混合相加。名称和加密自动登录在每张卡片的展开设置中，默认不保存密码；会话失效时每站最多自动尝试一次，失败暂停。验证码、二次验证和安全警告需您亲自处理。</p><p class="hint">前两个站点若显示网页自身的异常/返回页面，请您确认后自行处理；证书或浏览器安全警告不可绕过。金额未定位时旧值仅标为“上次结果”，不是当前余额。</p></details>
+<details class="channel-monitor-help"><summary>监控与登录说明</summary><p class="hint">五个渠道原始金额分别显示，不直接相加；您为每站保存人民币折算倍率后，只有五站读数均有效才显示折算总余额。名称和加密自动登录在每张卡片的展开设置中，默认不保存密码；会话失效时每站最多自动尝试一次，失败暂停。验证码、二次验证和安全警告需您亲自处理。</p><p class="hint">前两个站点若显示网页自身的异常/返回页面，请您确认后自行处理；证书或浏览器安全警告不可绕过。金额未定位时旧值仅标为“上次结果”，不是当前余额。</p></details>
+<details class="channel-monitor-help" id="finance-api-settings"><summary>本机只读财务接口（供后端对接，可收起）</summary>
+<p class="hint">默认关闭。启用后仅在本机 127.0.0.1:5191 提供经独立密钥保护的五渠道折算余额和全平台普通用户余额汇总；不包含客户邮箱或平台登录凭据。异机服务器不能直接访问本机地址，正式跨机接入须另行部署可信连接。</p>
+<p id="finance-api-status" role="status" aria-live="polite">正在核对接口状态…</p>
+<div class="channel-buttons"><button id="finance-api-enable" type="button">启用本机接口</button><button id="finance-api-pause" type="button">暂停接口</button><button id="finance-api-rotate" type="button">轮换访问密钥</button><button id="finance-api-copy-token" type="button">复制访问密钥（60 秒后清剪贴板）</button></div>
+<p class="hint">访问密钥不显示在页面或操作日志中；只在您明确点击复制时进入本机剪贴板。不要贴进聊天、浏览器地址栏或公开仓库。客户余额接口每次重新核对全部用户并限制查询频率；金额缺失时不会把旧值算作有效。</p></details>
 </section>
 <section id="channel-access" class="history" data-admin-view="channel-access" hidden aria-labelledby="channel-access-title">
 <div class="section-title"><h2 id="channel-access-title">渠道授权 · 管理员专用</h2><button id="channel-access-refresh" type="button">刷新授权</button></div>
@@ -134,15 +166,24 @@
 <label>周<select id="usage-history-week" aria-label="选择周"></select></label>
 <label>所属人<select id="usage-history-person" aria-label="选择所属人"></select></label>
 </div>
+<div class="usage-history-account-backfill"><label>定向补采账号<select id="usage-history-account-backfill-user"><option value="">先选择所属人和平台账号</option></select></label><button id="usage-history-account-label-refresh" type="button">同步账号名称</button><button id="usage-history-account-backfill" type="button" disabled>只补此账号本月已结束日期</button></div>
+<p id="usage-history-account-label-status" role="status" aria-live="polite">选择所属人后同步平台账号名称。</p>
+<p id="usage-history-account-backfill-status" role="status" aria-live="polite">只查询所选账号缺少记录的日期，不重读其他账号；加入归属前的用量按当前归属回填并计入合计，不发群。</p>
 <div class="usage-history-export">
 <label>导出开始日期<input id="usage-history-export-start" type="date" min="2020-01-01" max="2100-12-31"></label>
 <label>导出结束日期<input id="usage-history-export-end" type="date" min="2020-01-01" max="2100-12-31"></label>
 <button id="usage-history-export-person" type="button">导出当前归属人</button>
 <button id="usage-history-export-all" type="button">导出全部归属人</button>
 </div>
-<p id="usage-history-export-status" role="status" aria-live="polite">按选定日期导出横向 Excel 日表：左侧归属姓名与平台账号，上方每天一列，含各归属合计；默认当前周，未记录日期不会当作零。</p>
+<p id="usage-history-export-status" role="status" aria-live="polite">按选定日期导出横向 Excel 总用量表；日期不超过 31 天时另读取平台使用记录，生成“每日每用户每分组”工作表。超过 31 天仅导出原总用量，分组明细标未读取。未记录日期不会当作零。</p>
 <p id="usage-history-status" role="status" aria-live="polite">打开此栏目后读取本机历史记录。</p>
 <div id="usage-history-table" class="usage-history-table-wrap"></div>
+<section class="usage-group-section" aria-labelledby="usage-group-title">
+<div class="section-title"><h3 id="usage-group-title">逐账号 · 每日分组用量</h3><button id="usage-group-read" type="button">读取所选周的分组用量</button></div>
+<p class="hint">从平台“使用记录”只读读取所选归属人与周的用户实付金额，按实际使用分组和北京时间日期汇总。左侧当前授权分组仅供辨认，不代表历史使用分组。完整读取但没有请求显示 0；未归属或读取失败保持空白。不会发送飞书消息。</p>
+<p id="usage-group-status" role="status" aria-live="polite">选择月份、周和所属人后，点击读取分组用量。</p>
+<div id="usage-group-table" class="usage-history-table-wrap"></div>
+</section>
 </section>
 <section id="account-management" class="history" data-admin-view="account-management" hidden aria-labelledby="account-management-title"><div class="section-title"><h2 id="account-management-title">账号管理 · 定时调度</h2><button id="account-schedule-refresh" type="button">读取平台账号与计划</button></div>
 <p class="hint">对应平台账号管理页的“调度”开关。每条计划选择两个不同账号，按北京时间分别指定第一次、第二次执行的完整年月日时分；可跨日、跨月。计划保存后会自动执行一次，须保持本机程序运行和管理员授权有效。</p>
@@ -158,4 +199,36 @@
 <p class="hint">两步可填同一时分，仍会严格依次执行；第二步也可填次日或下个月。程序停机、休眠或授权失效超过执行时间 5 分钟后，该步记为错过，不会醒来补做。结果不明时暂停后续步骤，需人工核对。</p>
 <button id="account-schedule-create" class="dark" type="submit" disabled>保存并启用计划</button></form>
 <h3>已保存计划</h3><div id="account-schedule-plans"></div></section>
-<footer>仅本机管理入口<span>不是操作系统权限隔离；请勿向客户分发管理员会话。</span></footer></main><script src="admin-renderer.js"></script><script src="admin-history.js"></script><script src="admin-registration.js"></script><script src="admin-group-settings.js"></script><script src="admin-navigation.js"></script><script src="admin-operation-log-view.js"></script><script src="admin-channel-monitor.js"></script><script src="admin-channel-alert.js"></script><script src="admin-channel-access.js"></script><script src="admin-user-ownership.js"></script><script src="admin-daily-usage.js"></script><script src="admin-usage-history.js"></script><script src="admin-account-schedule.js"></script></body></html>
+<section id="recharge-query" class="history" data-admin-view="recharge-query" hidden aria-labelledby="recharge-query-title">
+<div class="section-title"><h2 id="recharge-query-title">充值查询 · 逐笔明细</h2></div>
+<p class="hint">从平台用户的充值记录只读查询，按原始流水逐笔列出收款人、充值类型、金额和操作人。管理员充值、扣减及其他余额来源分别标注，不从当前余额推算历史充值。全量读取可能耗时，请等待完成提示。</p>
+<form id="recharge-query-form" class="recharge-query-form">
+<label>收款用户 ID（留空查询全部用户）<input id="recharge-query-user-id" type="text" inputmode="numeric" autocomplete="off" placeholder="平台用户 ID；留空全量查询"></label>
+<label>管理员账号用户 ID（尚未提供可留空）<input id="recharge-query-admin-id" type="text" inputmode="numeric" autocomplete="off" placeholder="用于核对自充；本次输入不保存"></label>
+<button id="recharge-query-run" class="dark" type="submit">查询充值记录</button>
+</form>
+<p id="recharge-query-status" role="status" aria-live="polite">尚未查询。管理员账号 ID 尚未配置时，自充扣除与给他人小额统计保持待确认。</p>
+<div id="recharge-query-warning" class="recharge-query-warning" role="status" aria-live="polite" hidden></div>
+<div id="recharge-query-summary" class="recharge-query-summary" aria-label="充值汇总" hidden></div>
+<label class="recharge-query-filter">筛选本次充值流水（收款人、类型或流水 ID）<input id="recharge-query-filter" type="search" autocomplete="off" disabled></label>
+<p id="recharge-query-count" class="hint"></p>
+<div id="recharge-query-results" class="recharge-query-results" aria-live="polite"></div>
+<section id="recharge-query-audit" class="recharge-query-audit" hidden aria-labelledby="recharge-query-audit-title">
+<h3 id="recharge-query-audit-title">管理员操作审计候选</h3>
+<p class="hint">以下是独立的余额操作请求线索，尚未与上方平台充值流水逐笔对账。请求值不是已入账金额；不能用这些记录认定充值操作人、自充扣除或净额。</p>
+<p id="recharge-query-audit-status" role="status" aria-live="polite"></p>
+<div id="recharge-query-audit-rows"></div>
+</section>
+</section>
+<section id="user-balance" class="history" data-admin-view="user-balance" hidden aria-labelledby="user-balance-title">
+<div class="section-title"><h2 id="user-balance-title">用户余额</h2><button id="user-balance-read" type="button" class="dark">读取全部用户余额</button></div>
+<p class="hint">合计只累加普通用户大于 0 的余额，包含已停用普通用户；管理员账号、零余额和负余额不计入。全部账号仍逐条列出，默认按余额从小到大排列。搜索只筛选下方列表，不改变全量合计。</p>
+<p id="user-balance-status" role="status" aria-live="polite">尚未读取。点击按钮后完整分页读取平台用户目录。</p>
+<div id="user-balance-summary" class="user-balance-summary" aria-label="全量用户余额汇总" hidden></div>
+<p id="user-balance-time" class="hint"></p>
+<p class="hint">余额可能在分页读取期间变化，本次结果不是同一时刻的原子快照。需要更新时请手动重新读取；查询不修改余额，也不发送飞书消息。</p>
+<label class="user-balance-search">搜索姓名、邮箱或用户 ID<input id="user-balance-search" type="search" autocomplete="off" disabled></label>
+<p id="user-balance-count" class="hint"></p>
+<div id="user-balance-results" class="user-balance-results" aria-live="polite"></div>
+</section>
+<footer>仅本机管理入口<span>不是操作系统权限隔离；请勿向客户分发管理员会话。</span></footer></main><script src="admin-renderer.js"></script><script src="admin-history.js"></script><script src="admin-registration.js"></script><script src="admin-group-settings.js"></script><script src="admin-navigation.js"></script><script src="admin-operation-log-view.js"></script><script src="finance-metrics.js"></script><script src="admin-channel-monitor.js"></script><script src="admin-finance-http.js"></script><script src="admin-channel-alert.js"></script><script src="admin-channel-access.js"></script><script src="admin-user-ownership.js"></script><script src="admin-daily-usage.js"></script><script src="admin-usage-history.js"></script><script src="admin-account-schedule.js"></script><script src="admin-recharge-query.js"></script><script src="admin-bulk-group-rates.js"></script><script src="admin-user-balance.js"></script></body></html>

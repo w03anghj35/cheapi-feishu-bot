@@ -5,7 +5,15 @@
   "main": "main.js",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.76.0",
+    "@napi-rs/canvas": "1.1.0",
+    "@tesseract.js-data/eng": "1.0.0",
     "exceljs": "4.4.0",
-    "nodemailer": "7.0.13"
+    "mammoth": "1.13.0",
+    "nodemailer": "7.0.13",
+    "pdfjs-dist": "6.5.438",
+    "tesseract.js": "7.0.0"
+  },
+  "overrides": {
+    "wasm-feature-detect": "1.6.2"
   }
 }

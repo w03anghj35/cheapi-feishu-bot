@@ -6,7 +6,9 @@
   const hints={INPUT:'检查名称重复、长度和输入格式。',AUTH:'到管理配置重新核验平台授权。',DENIED:'确认平台管理员权限。',
     POLICY:'检查当前账户、群策略或绑定是否变化。',NETWORK:'检查网络；结果未确认前不要重复提交业务。',HTTP:'核对HTTP状态与平台权限；如涉及业务更新请先核对最终状态。',
     SCHEMA:'平台返回结构或分页变化，重新读取并检查。',STORAGE:'保留本机文件，检查磁盘及权限，不要删除账本。',BUSY:'其他操作尚未完成，等待并查看当前阶段。',
-    UNKNOWN:'只读核对平台结果，不自动重试。',OPERATION_ERROR:'按操作编号和阶段排查，原始错误已脱敏。'};
+    UNKNOWN:'只读核对平台结果，不自动重试。',KEY_AUTH:'核对受限只读密钥是否有效；原网页登录授权未因此清除。',
+    KEY_DENIED:'核对密钥读取权限和允许的出口 IP。',KEY_REQUIRED:'在管理配置核对本机受限只读密钥。',
+    RATE_LIMIT:'等待平台限流窗口恢复后再查询。',OPERATION_ERROR:'按操作编号和阶段排查，原始错误已脱敏。'};
   function node(tag,text){const n=document.createElement(tag);n.textContent=text;return n;}
   function render(){
     const table=data.recordTable;

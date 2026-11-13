@@ -118,6 +118,128 @@ test('explicit today sampling bypasses the hourly interval but never backfills o
   assert.deepEqual(await f.publisher.collectToday(), { skipped: 'backoff' });
   assert.equal(f.reads(), reads + 1);
 });
+test('single-account month backfill skips existing dates, preserves full snapshots and never sends cards', async t => {
+  const f = fixture(t); await f.publisher.historyTick();
+  const old = structuredClone(f.store.state(scope).snapshots['2026-11-05']);
+  const calls = [];
+  f.publisher.usage.readAccount = async (day, name, userId) => {
+    calls.push({ day, name, userId });
+    return { day, name, scope, checkedAt: '2026-11-06T02:00:00Z',
+      user: { id: userId, email: 'a@example.invalid', cost: Number(day.slice(-2)) } };
+  };
+  const input = { name: '虚构归属', userId: 7 };
+  const result = await f.publisher.backfillAccountCurrentMonth(input);
+  assert.equal(result.phase, 'done');
+  assert.equal(result.completed, 4); assert.equal(result.skipped, 1);
+  assert.deepEqual(calls.map(row => row.day), ['2026-11-01','2026-11-02','2026-11-03','2026-11-04']);
+  assert.ok(calls.every(row => row.name === input.name && row.userId === input.userId));
+  assert.deepEqual(f.store.state(scope).snapshots['2026-11-05'], old);
+  assert.equal(f.store.state(scope).supplements['2026-11-02']['虚构归属'][7].user.cost, 2);
+  assert.equal(f.publisher.historyWeek({month:'2026-11',weekStart:'2026-11-02',name:'虚构归属'}).rows[0].values[0], 2);
+  assert.equal(f.publisher.historyExport({scope:'person',name:'虚构归属',start:'2026-11-02',end:'2026-11-02'}).rows[0].cost, 2);
+  assert.equal(f.sends.length + f.patches.length, 0);
+  assert.deepEqual((await f.publisher.backfillAccountCurrentMonth(input)).completed, 0);
+  assert.equal(calls.length, 4);
+  const reopened = makeDailyUsageStore(f.dir, encryption); reopened.load();
+  assert.equal(reopened.state(scope).supplements['2026-11-02']['虚构归属'][7].user.cost, 2);
+});
+test('single-account backfill rejects other users and preserves completed days after failure', async t => {
+  const f = fixture(t); const input = { name: '虚构归属', userId: 7 };
+  await assert.rejects(f.publisher.backfillAccountCurrentMonth({ name: '虚构归属', userId: 99 }), /当前归属/);
+  let reads = 0;
+  f.publisher.usage.readAccount = async (day, name, userId) => {
+    reads++;
+    if (reads === 2) throw Error('synthetic timeout');
+    return { day, name, scope, checkedAt: '2026-11-06T02:00:00Z',
+      user: { id: userId, email: 'a@example.invalid', cost: 1 } };
+  };
+  assert.equal((await f.publisher.backfillAccountCurrentMonth(input)).phase, 'failed');
+  assert.equal(f.store.state(scope).supplements['2026-11-01']['虚构归属'][7].user.cost, 1);
+  assert.equal(f.store.state(scope).supplements['2026-11-02'], undefined);
+  assert.equal(f.sends.length + f.patches.length, 0);
+});
+test('single-account backfill stops when the account is already attributed to another owner', async t => {
+  const f = fixture(t);
+  f.store.append({ type:'snapshot', scope, day:'2026-11-01', checkedAt:'2026-11-06T02:00:00Z', final:true,
+    rows:[{name:'其他归属',users:[{id:7,email:'a@example.invalid',cost:9}]}] });
+  let calls=0;
+  f.publisher.usage.readAccount=async()=>{calls++;throw Error('should not read');};
+  const result=await f.publisher.backfillAccountCurrentMonth({name:'虚构归属',userId:7});
+  assert.equal(result.phase,'failed');
+  assert.match(result.message,/其他归属/);
+  assert.equal(calls,0);
+  assert.equal(f.store.state(scope).supplements?.['2026-11-01'],undefined);
+});
+test('single-account backfill can supplement a raw old snapshot hidden by a later membership date', async t => {
+  const f = fixture(t);
+  f.store.append({type:'snapshot',scope,day:'2026-11-01',checkedAt:'2026-11-01T02:00:00Z',final:true,
+    rows:[{name:'虚构归属',users:[{id:7,email:'a@example.invalid',cost:1}]}]});
+  f.publisher.usage.ownership.datedProfiles = () => [{name:'虚构归属',userIds:[7],membership:{baselineIds:[],
+    changes:[{day:'2026-11-01',userIds:[]},{day:'2026-11-06',userIds:[7]}]}}];
+  const called=[];
+  f.publisher.usage.readAccount=async(day,name,userId)=>{
+    called.push(day);return {day,name,scope,checkedAt:'2026-11-06T02:00:00Z',
+      user:{id:userId,email:'a@example.invalid',cost:9}};
+  };
+  const old=structuredClone(f.store.state(scope).snapshots['2026-11-01']);
+  const result=await f.publisher.backfillAccountCurrentMonth({name:'虚构归属',userId:7});
+  assert.equal(result.phase,'done'); assert.ok(called.includes('2026-11-01'));
+  assert.deepEqual(f.store.state(scope).snapshots['2026-11-01'],old);
+  assert.equal(f.store.state(scope).supplements['2026-11-01']['虚构归属'][7].user.cost,9);
+  const week=f.publisher.historyWeek({month:'2026-11',weekStart:'2026-10-26',name:'虚构归属'});
+  assert.equal(week.rows.find(row=>row.id===7).values[6],9);
+});
+test('single-account month backfill on the first day has no closed dates and makes no request', async t => {
+  const f = fixture(t); f.setNow(Date.parse('2026-11-01T02:00:00Z'));
+  let reads=0;f.publisher.usage.readAccount=async()=>{reads++;throw Error('unexpected read');};
+  const result=await f.publisher.backfillAccountCurrentMonth({name:'虚构归属',userId:7});
+  assert.equal(result.phase,'done');assert.equal(result.total,0);assert.equal(reads,0);
+  assert.deepEqual(f.store.state(scope).supplements,{});
+});
+test('account options read current platform labels but return only the selected owner accounts', async t => {
+  const f = fixture(t);
+  const calls = [];
+  f.publisher.usage.ownership = {
+    admin: async () => { calls.push('admin'); return scope; },
+    profiles: () => [{ name: '虚构归属', userIds: [7, 8] }, { name: '另一归属', userIds: [9] }],
+    users: async () => { calls.push('users'); return [7, 8, 9].map(id => ({ id,
+      role: 'user', email: `u${id}@example.invalid`, username: `客户${id}`, balance: 1000,
+      password: 'fixture-only-not-real' })); },
+    profileAccounts: () => [{ id: 7, email: null }, { id: 8, email: null }]
+  };
+  const before = f.store.state(scope);
+  const result = await f.publisher.accountOptions({ name: '虚构归属' });
+  assert.deepEqual(calls, ['admin', 'users', 'admin']);
+  assert.deepEqual(result, { name: '虚构归属', accounts: [
+    { id: 7, email: 'u7@example.invalid', username: '客户7' },
+    { id: 8, email: 'u8@example.invalid', username: '客户8' } ] });
+  assert.equal(JSON.stringify(result).includes('u9@example.invalid'), false);
+  assert.equal(JSON.stringify(result).includes('password'), false);
+  assert.deepEqual(f.store.state(scope), before);
+  await assert.rejects(f.publisher.accountOptions({ name: '不存在' }), /归属人不存在/);
+  await assert.rejects(f.publisher.accountOptions({ name: '虚构归属', userId: 9 }), /归属人/);
+});
+test('account label lookup fails closed on stale ownership, missing account, or platform failure without affecting history', async t => {
+  const f = fixture(t);
+  let profiles = [{ name: '虚构归属', userIds: [7] }];
+  const ownership = {
+    admin: async () => scope,
+    profiles: () => structuredClone(profiles),
+    users: async () => [{ id: 7, role: 'user', email: 'u7@example.invalid', username: '客户7' }],
+    profileAccounts: () => [{ id: 7, email: null }]
+  };
+  f.publisher.usage.ownership = ownership;
+  ownership.users = async () => { profiles = [{ name: '虚构归属', userIds: [8] }];
+    return [{ id: 7, role: 'user', email: 'u7@example.invalid', username: '客户7' }]; };
+  await assert.rejects(f.publisher.accountOptions({ name: '虚构归属' }), /归属已变化/);
+  profiles = [{ name: '虚构归属', userIds: [7] }];
+  ownership.users = async () => [{ id: 7, role: 'admin', email: 'a@example.invalid', username: '管理' }];
+  await assert.rejects(f.publisher.accountOptions({ name: '虚构归属' }), /普通用户目录/);
+  ownership.users = async () => { throw Error('fixture platform offline'); };
+  await assert.rejects(f.publisher.accountOptions({ name: '虚构归属' }), /fixture platform offline/);
+  assert.equal(f.publisher.historyCatalog().names.includes('虚构归属'), true);
+  assert.equal(f.sends.length + f.patches.length, 0);
+});
 
 test('today-only read failure or assignment change preserves the last snapshot and backoff', async t => {
   for (const mode of ['failure','changed']) {

@@ -1,6 +1,7 @@
 'use strict';
 const { dayKey } = require('./daily-usage');
 const { projectSnapshots, membershipPhase, datedIds } = require('./ownership-dates');
+const { supplementedUsers } = require('./daily-usage-supplements');
 
 const DAY_MS = 24 * 60 * 60_000;
 const dateOf = day => Date.parse(`${dayKey(day)}T00:00:00Z`);
@@ -23,8 +24,10 @@ function weeksInMonth(month) {
 function historyCatalog(state, currentNames, today) {
   dayKey(today);
   const snapshots = state?.snapshots || {};
-  const months = [...new Set([today.slice(0, 7), ...Object.keys(snapshots).map(day => dayKey(day).slice(0, 7))])].sort().reverse();
-  const names = [...new Set([...currentNames, ...Object.values(snapshots).flatMap(snapshot => snapshot.rows.map(row => row.name))])]
+  const months = [...new Set([today.slice(0, 7), ...Object.keys(snapshots).map(day => dayKey(day).slice(0, 7)),
+    ...Object.keys(state?.supplements || {}).map(day => dayKey(day).slice(0, 7))])].sort().reverse();
+  const names = [...new Set([...currentNames, ...Object.values(snapshots).flatMap(snapshot => snapshot.rows.map(row => row.name)),
+    ...Object.values(state?.supplements || {}).flatMap(day => Object.keys(day))])]
     .sort((a, b) => a.localeCompare(b, 'zh-CN'));
   return { months, weeksByMonth: Object.fromEntries(months.map(month => [month, weeksInMonth(month)])), names, today };
 }
@@ -40,10 +43,14 @@ function historyWeek(state, { month, weekStart, name }, today, currentNames = []
     const day = isoDay(Date.parse(`${week.start}T00:00:00Z`) + index * DAY_MS);
     const snapshot = state.snapshots[day];
     const profile = snapshot?.rows.find(row => row.name === name);
-    return { day, phase: day > today ? 'future' : !profile ? 'missing' :
+    const extra = supplementedUsers(state, day, name, profile?.users || []);
+    return { day, phase: day > today ? 'future' : !profile && extra.supplemented ? 'partial' : !profile ? 'missing' :
       snapshot.final ? 'final' : day < today ? 'pending' : 'ongoing', checkedAt: profile ? snapshot.checkedAt : null,
-      source: profile ? snapshot.source || 'scheduled' : null,
-      users: profile?.users || [] };
+      source: extra.supplemented ? 'backfill-current-ownership' : profile ? snapshot.source || 'scheduled' : null,
+      users: extra.users,
+      supplemented: extra.supplemented,
+      supplementedIds: extra.supplementedIds,
+      ...(extra.checkedAt && (!profile || extra.checkedAt > snapshot.checkedAt) ? { checkedAt: extra.checkedAt } : {}) };
   });
   const users = new Map();
   for (const day of days) for (const user of day.users) {
@@ -65,7 +72,8 @@ function historyWeek(state, { month, weekStart, name }, today, currentNames = []
   }
   const rows = [...users.values()].sort((a, b) => a.id - b.id).map(user => {
     const values = days.map(day => Object.hasOwn(user.costs, day.day) ? user.costs[day.day] : null);
-    const membership = days.map(day => membershipPhase(datedProfile, user.id, day.day));
+    const membership = days.map(day => day.supplementedIds.includes(user.id) ? null :
+      membershipPhase(datedProfile, user.id, day.day));
     return { id: user.id, email: user.email, values,
       membership,
       awaitingSample: currentIds.has(user.id) && !Object.hasOwn(user.costs, today),
@@ -81,7 +89,7 @@ function historyWeek(state, { month, weekStart, name }, today, currentNames = []
   });
   const totalsComplete = days.map((day, index) => day.phase === 'final' && rows.every(row => row.values[index] !== null || row.membership[index]));
   return { month, week, name, today, awaitingCount: rows.filter(row => row.awaitingSample).length,
-    days: days.map(({ users: _users, ...day }) => day), rows, totals,
+    days: days.map(({ users: _users, supplementedIds: _supplementedIds, ...day }) => day), rows, totals,
     totalsComplete,
     recordedSubtotal: totals.reduce((sum, value) => sum + (value ?? 0), 0),
     complete: days.every(day => day.phase === 'final') && rows.every(row => row.complete) };

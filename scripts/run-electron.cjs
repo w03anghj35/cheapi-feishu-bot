@@ -4,7 +4,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const args = process.argv.slice(2);
-const permitted = new Set(['--admin-groups', '--fixture-test', '--diagnostic']);
+const permitted = new Set(['--admin-groups', '--fixture-test', '--fixture-finance-test', '--diagnostic']);
 if (args.length > 1 || args.some(arg => !permitted.has(arg))) {
   console.error('Unsupported launcher arguments.'); process.exit(1);
 }

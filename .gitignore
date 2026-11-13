@@ -28,3 +28,7 @@ config.json
 **/Partitions/
 CheapiKeyStudio*/
 
+# Separate checkout and local backup copies are not part of this desktop project.
+/飞书线上/
+/本地备份/
+

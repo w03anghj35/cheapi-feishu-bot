@@ -33,6 +33,10 @@ function makeFixture({ admin = false } = {}) {
       ], total: 2 };
       if (method === 'GET' && /^\/admin\/usage\/stats\?user_id=\d+&start_date=\d{4}-\d{2}-\d{2}&end_date=\d{4}-\d{2}-\d{2}$/.test(route))
         return { total_actual_cost: 1.25, total_cost: 2.5, total_requests: 3 };
+      if (method === 'GET' && /^\/admin\/usage\?user_id=[1-9]\d*&page=\d+&page_size=100&start_date=\d{4}-\d{2}-\d{2}&end_date=\d{4}-\d{2}-\d{2}&timezone=Asia%2FShanghai&sort_by=created_at&sort_order=desc&exact_total=true$/.test(route))
+        return { items: [], total: 0 };
+      if (method === 'GET' && /^\/admin\/users\/[1-9]\d*$/.test(route))
+        return { id: Number(route.split('/').at(-1)), allowed_groups: [7], restrict_public_groups: true };
       if (method === 'GET' && /^\/admin\/accounts\?page=\d+&page_size=100$/.test(route))
         return { items: structuredClone(accounts), total: accounts.length };
       if (method === 'GET' && /^\/admin\/accounts\/\d+$/.test(route)) {
@@ -108,8 +112,8 @@ async function verifyUI({ app, ui, fixture, registrationService, tokenService, u
       throw new Error('admin UI wait timeout: ' + expr + ' status: ' + status); };
     await adminWait('document.querySelectorAll("[data-group-id]").length===3 && !document.getElementById("admin-save").disabled');
     assert.equal(await adminRun('document.getElementById("admin-view-title").textContent'), '管理配置');
-    assert.equal(await adminRun('document.querySelectorAll("[data-admin-target]").length'), 11);
-    for (const view of ['configuration','token-groups','group-settings','token-history','registration-history','operation-log','channel-monitor','channel-access','user-ownership','account-management','usage-history']) {
+    assert.equal(await adminRun('document.querySelectorAll("[data-admin-target]").length'), 14);
+    for (const view of ['configuration','token-groups','group-settings','token-history','registration-history','operation-log','channel-monitor','channel-access','user-ownership','account-management','usage-history','recharge-query','bulk-group-rates','user-balance']) {
       await navigate(view);
       assert.equal(await adminRun(`Array.from(document.querySelectorAll('[data-admin-view]')).every(p=>p.hidden===(p.dataset.adminView!=='${view}')&&p.inert===p.hidden)`), true);
       assert.equal(await adminRun('document.querySelectorAll("[data-admin-target][aria-current=page]").length'), 1);
@@ -128,17 +132,24 @@ async function verifyUI({ app, ui, fixture, registrationService, tokenService, u
       'admin-records', 'admin-record', 'admin-secret', 'admin-copy-secret', 'admin-recover-authorization',
       'admin-feishu-save-credentials', 'admin-feishu-state', 'admin-registration-records', 'admin-registration-review',
       'admin-group-settings-refresh', 'admin-group-settings-save', 'admin-group-settings-records', 'admin-group-settings-review', 'admin-operation-log', 'admin-record-table-sync','admin-record-table-open',
+      'admin-bulk-group-rates-snapshot', 'admin-bulk-group-rates-import', 'admin-bulk-group-rates-preview', 'admin-bulk-group-rates-commit',
+      'admin-bulk-group-rates-history', 'admin-bulk-group-rates-review',
       'admin-user-ownership-list', 'admin-user-ownership-save', 'admin-user-ownership-save-name',
       'admin-user-ownership-client-change',
       'admin-user-ownership-link',
       'admin-user-ownership-draft-state', 'admin-user-ownership-draft-save',
       'admin-daily-usage-state', 'admin-daily-usage-preview', 'admin-daily-usage-enable',
       'admin-daily-usage-pause', 'admin-daily-usage-now', 'admin-daily-usage-review-absent',
-      'admin-daily-usage-history-catalog', 'admin-daily-usage-history-week', 'admin-daily-usage-history-export',
+      'admin-daily-usage-history-catalog', 'admin-daily-usage-account-options',
+      'admin-daily-usage-history-week', 'admin-daily-usage-history-export',
+      'admin-daily-usage-group-week',
       'admin-daily-usage-collect-today',
       'admin-daily-usage-backfill-status', 'admin-daily-usage-backfill-current-month',
+      'admin-daily-usage-account-backfill-status', 'admin-daily-usage-account-backfill-current-month',
       'admin-account-schedule-snapshot', 'admin-account-schedule-state', 'admin-account-schedule-create',
       'admin-account-schedule-cancel', 'admin-account-schedule-reconcile',
+      'admin-recharge-query',
+      'admin-user-balance-query',
       'admin-channel-monitor-state','admin-channel-monitor-rename','admin-channel-monitor-open','admin-channel-monitor-check',
       'admin-channel-access-state','admin-channel-access-save','admin-channel-access-update','admin-channel-access-revoke','admin-channel-access-preview',
       'admin-channel-alert-state','admin-channel-alert-save','admin-channel-alert-pause','admin-channel-alert-clear','admin-channel-alert-test',
@@ -153,6 +164,15 @@ async function verifyUI({ app, ui, fixture, registrationService, tokenService, u
     await auth.ensure();
     await adminRun('document.getElementById("admin-refresh").click()');
     await adminWait('document.querySelectorAll("[data-group-id]").length===3 && !document.getElementById("admin-save").disabled');
+    await navigate('user-balance');
+    await adminRun('document.getElementById("user-balance-read").click()');
+    await adminWait('document.getElementById("user-balance-status").textContent.includes("读取完成")');
+    assert.equal(await adminRun('document.querySelectorAll("#user-balance-results tbody tr").length'), 2);
+    assert.equal(await adminRun('document.querySelector("#user-balance-summary strong").textContent'), '6 USD');
+    await adminRun('document.getElementById("user-balance-search").value="alice";document.getElementById("user-balance-search").dispatchEvent(new Event("input"))');
+    assert.equal(await adminRun('document.querySelectorAll("#user-balance-results tbody tr").length'), 1);
+    assert.equal(await adminRun('document.querySelector("#user-balance-summary strong").textContent'), '6 USD');
+    console.log('User balance IPC, complete query, table and full-total filtering verified with fictional data.');
     await navigate('user-ownership');
     await adminRun('document.getElementById("ownership-refresh").click()');
     await adminWait('document.getElementById("ownership-notice").textContent.includes("已读取") || document.getElementById("ownership-notice").textContent.includes("读取失败") || document.getElementById("ownership-notice").textContent.includes("授权可能")');
@@ -263,7 +283,8 @@ async function verifyUI({ app, ui, fixture, registrationService, tokenService, u
       await adminWait('document.getElementById("usage-history-export-status").textContent.includes("已导出")');
       const exported = new (require('exceljs').Workbook)();
       await exported.xlsx.readFile(exportPath);
-      assert.equal(exported.worksheets.length, 1);
+      assert.equal(exported.worksheets.length, 2);
+      assert.ok(exported.getWorksheet('分组用量'), 'group usage remains a separate worksheet');
       const usageSheet = exported.getWorksheet('用量明细');
       assert.equal(usageSheet.getCell('A1').value, '归属姓名');
       assert.equal(usageSheet.getCell('C1').value.toISOString().slice(0, 10), '2026-11-01');
@@ -868,6 +889,60 @@ async function verifyUI({ app, ui, fixture, registrationService, tokenService, u
       assert.equal(usageTransport.filter(call => call.path === '/api/v1/admin/usage/stats').length, 1);
       assert.equal(usageTransport.every(call => call.method === 'GET'), true);
     } finally { apiSession.fetch = usageFetch; }
+    // Group usage detail is a read-only, exact per-user route.
+    const groupUsageFetch = apiSession.fetch, groupUsageTransport = [];
+    let groupUsageRole = 'admin';
+    apiSession.fetch = async (url, options) => {
+      const target = new URL(url);
+      groupUsageTransport.push({ path: target.pathname, method: options.method });
+      assert.equal(options.method, 'GET');
+      if (target.pathname === '/api/v1/auth/me') return { ok: true, status: 200,
+        json: async () => ({ code: 0, data: { id: 1, role: groupUsageRole } }) };
+      return { ok: true, status: 200, json: async () => ({ code: 0, data: { items: [], total: 0 } }) };
+    };
+    try {
+      const detail = '/admin/usage?user_id=8&page=1&page_size=100&start_date=2026-11-09&end_date=2026-11-15&timezone=Asia%2FShanghai&sort_by=created_at&sort_order=desc&exact_total=true';
+      await assert.rejects(request('GET', detail), { code: 'ROUTE' });
+      await assert.rejects(request('GET', detail + '&extra=1', undefined, { groupUsage: true }), { code: 'ROUTE' });
+      await assert.rejects(request('POST', detail, {}, { groupUsage: true }), { code: 'ROUTE' });
+      groupUsageRole = 'user';
+      await assert.rejects(request('GET', detail, undefined, { groupUsage: true }), { code: 'DENIED' });
+      groupUsageRole = 'admin';
+      assert.equal((await request('GET', detail, undefined, { groupUsage: true })).total, 0);
+      assert.equal(groupUsageTransport.every(call => call.method === 'GET'), true);
+    } finally { apiSession.fetch = groupUsageFetch; }
+    // Recharge and audit reads use exact allowlisted GET routes; all calls remain in the fictional transport.
+    const rechargeFetch = apiSession.fetch, rechargeTransport = [];
+    let rechargeRole = 'admin';
+    apiSession.fetch = async (url, options) => {
+      const target = new URL(url);
+      rechargeTransport.push({ path: target.pathname, search: target.search, method: options.method });
+      assert.equal(options.credentials, 'omit'); assert.equal(options.redirect, 'error');
+      assert.equal(options.headers.Authorization, 'Bearer fixture-only');
+      assert.equal(options.method, 'GET');
+      if (target.pathname === '/api/v1/auth/me') return { ok: true, status: 200,
+        json: async () => ({ code: 0, data: { id: 1, role: rechargeRole } }) };
+      if (target.pathname === '/api/v1/admin/audit-logs/25') return { ok: true, status: 200,
+        json: async () => ({ code: 0, data: { id: 25 } }) };
+      return { ok: true, status: 200,
+        json: async () => ({ code: 0, data: { items: [], total: 0 } }) };
+    };
+    try {
+      const context = { rechargeQuery: true };
+      const balance = '/admin/users/8/balance-history?page=1&page_size=15';
+      const audit = '/admin/audit-logs?page=1&page_size=20&q=%2Fadmin%2Fusers%2F8%2Fbalance';
+      await assert.rejects(request('GET', balance), { code: 'ROUTE' });
+      await assert.rejects(request('GET', `${balance}&extra=1`, undefined, context), { code: 'ROUTE' });
+      await assert.rejects(request('GET', '/admin/audit-logs?page=1&page_size=20&q=all', undefined, context), { code: 'ROUTE' });
+      await assert.rejects(request('POST', '/admin/users/8/balance', { value: 10 }, context), { code: 'ROUTE' });
+      rechargeRole = 'user';
+      await assert.rejects(request('GET', balance, undefined, context), { code: 'DENIED' });
+      rechargeRole = 'admin';
+      assert.equal((await request('GET', balance, undefined, context)).total, 0);
+      assert.equal((await request('GET', audit, undefined, context)).total, 0);
+      assert.equal((await request('GET', '/admin/audit-logs/25', undefined, context)).id, 25);
+      assert.equal(rechargeTransport.every(call => call.method === 'GET'), true);
+    } finally { apiSession.fetch = rechargeFetch; }
     // Exercise the real request adapter with a mocked transport, never the real platform.
     fixture.setAuthFail(false);
     const transport = [], originalFetch = apiSession.fetch;

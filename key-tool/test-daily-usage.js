@@ -46,6 +46,17 @@ test('read-only daily stats query covers each distinct assigned user once', asyn
   assert.ok(f.calls.every(call => call.method === 'GET'));
   assert.equal((await f.service.read('2026-11-04')).final, true);
 });
+test('single-account historical read queries only the selected assigned user and rechecks scope', async () => {
+  const f = fixture();
+  const result = await f.service.readAccount('2026-11-04', '陈梦', 9);
+  assert.deepEqual(result.user, { id: 9, email: 'u9@example.invalid', cost: 1.25 });
+  assert.deepEqual(f.calls, [{ method: 'GET', route: statsRoute(9, '2026-11-04') }]);
+  await assert.rejects(f.service.readAccount('2026-11-05', '陈梦', 9), /已结束/);
+  await assert.rejects(f.service.readAccount('2026-11-04', '陈梦', 3), /不属于/);
+  f.setResponse(() => { f.setProfiles([{ name: '陈梦', userIds: [2] }]); return { total_actual_cost: 4 }; });
+  await assert.rejects(f.service.readAccount('2026-11-04', '陈梦', 9), /变化/);
+  assert.equal(f.service.busy, false);
+});
 test('at most two reads overlap and out-of-order amounts retain their user mapping', async () => {
   const f = fixture();
   f.setProfiles([{ name: '陈梦', userIds: [9, 2] }, { name: '李胜', userIds: [2, 3] }]);

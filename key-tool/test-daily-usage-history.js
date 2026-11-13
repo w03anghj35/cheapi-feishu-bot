@@ -82,3 +82,19 @@ test('new person with no samples still lists every assigned account without fabr
   assert.equal(data.rows[0].awaitingSample, true);
   assert.deepEqual(data.totals, Array(7).fill(null));
 });
+test('targeted pre-assignment supplement contributes to current owner history without changing original snapshot', () => {
+  const original = { snapshots: { '2026-11-02': snapshot('2026-11-02', [
+    { name: '甲', users: [user(1, 4)] }]) }, supplements: { '2026-11-02': { '甲': {
+      7: { day: '2026-11-02', profile: '甲', checkedAt: '2026-11-09T08:00:00Z',
+        user: user(7, 5) } } } } };
+  const before = structuredClone(original.snapshots['2026-11-02']);
+  const dated = [{ name: '甲', userIds: [1, 7], membership: { baselineIds: [1],
+    changes: [{ day: '2026-11-01', userIds: [1] }, { day: '2026-11-09', userIds: [1, 7] }] } }];
+  const result = historyWeek(original, {month:'2026-11',weekStart:'2026-11-02',name:'甲'},
+    '2026-11-09', ['甲'], [{id:1,email:'u1@example.invalid'},{id:7,email:'u7@example.invalid'}], dated);
+  assert.equal(result.rows.find(row => row.id === 7).values[0], 5);
+  assert.equal(result.rows.find(row => row.id === 7).membership[0], null);
+  assert.equal(result.totals[0], 9);
+  assert.equal(result.days[0].source, 'backfill-current-ownership');
+  assert.deepEqual(original.snapshots['2026-11-02'], before);
+});

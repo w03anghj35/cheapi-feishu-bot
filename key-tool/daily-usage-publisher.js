@@ -4,6 +4,7 @@ const { beijingDay } = require('./daily-usage');
 const { dailyUsageCard, retiredDailyUsageCard } = require('./daily-usage-card');
 const { historyCatalog, historyWeek } = require('./daily-usage-history');
 const { exportRows } = require('./daily-usage-export');
+const { projectSnapshots } = require('./ownership-dates');
 const { validScope, validDailyTime } = require('./daily-usage-store');
 
 const HOUR_MS = 60 * 60_000;
@@ -38,6 +39,7 @@ class DailyUsagePublisher {
     this.busy = false; this.retryAfter = 0; store.load();
     this.historyRetryAfter = 0; this.historyAttemptAt = null; this.historyFailure = null;
     this.backfill = { phase: 'idle', completed: 0, skipped: 0, total: 0, day: null };
+    this.accountBackfill = { phase: 'idle', completed: 0, skipped: 0, total: 0, day: null };
   }
   scope() { const scope = this.getScope(); if (!scope) throw Error('平台管理员与目标群尚未就绪。'); return scope; }
   sameOwnership(fresh) {
@@ -87,7 +89,37 @@ class DailyUsagePublisher {
   historyCatalog() {
     const scope = this.scope();
     const names = this.usage.ownership?.profiles?.().map(row => row.name) || [];
-    return historyCatalog(this.store.state(scope), names, beijingDay(this.now()));
+    const catalog = historyCatalog(this.store.state(scope), names, beijingDay(this.now()));
+    catalog.accountsByPerson = Object.fromEntries(names.map(name => [name,
+      this.usage.ownership?.profileAccounts?.(name) || []]));
+    return catalog;
+  }
+  async accountOptions(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        Object.keys(input).join(',') !== 'name' || typeof input.name !== 'string')
+      throw Error('请选择有效的归属人。');
+    const ownership = this.usage.ownership;
+    if (!ownership?.admin || !ownership?.users || !ownership?.profiles)
+      throw Error('用户归属目录暂不可读取。');
+    const scope = this.scope();
+    const verified = await ownership.admin();
+    if (verified.owner !== scope.owner || verified.groupId !== scope.groupId)
+      throw Error('管理员或目标群已变化，请重新读取。');
+    const profiles = ownership.profiles();
+    const current = profiles.find(row => row.name === input.name);
+    if (!current || !Array.isArray(current.userIds)) throw Error('所选归属人不存在，请重新读取。');
+    const users = await ownership.users();
+    const after = await ownership.admin();
+    if (after.owner !== scope.owner || after.groupId !== scope.groupId ||
+        JSON.stringify(ownership.profiles()) !== JSON.stringify(profiles) ||
+        this.scope().owner !== scope.owner || this.scope().groupId !== scope.groupId)
+      throw Error('管理员、目标群或归属已变化，请重新读取。');
+    const directory = new Map(users.filter(user => user.role === 'user').map(user => [user.id, user]));
+    if (current.userIds.some(id => !directory.has(id)))
+      throw Error('当前归属账号不在平台普通用户目录中，请重新核对。');
+    return { name: current.name,
+      accounts: current.userIds.map(id => ({ id, email: directory.get(id).email,
+        username: directory.get(id).username })) };
   }
   historyWeek(input) {
     const scope = this.scope();
@@ -168,6 +200,69 @@ class DailyUsagePublisher {
     } finally { this.busy = false; }
   }
   backfillStatus() { return { ...this.backfill }; }
+  accountBackfillStatus() { return { ...this.accountBackfill }; }
+  async backfillAccountCurrentMonth(input) {
+    if (this.busy || this.usage.busy) throw Error('已有每日用量任务，请稍后再补采。');
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        Object.keys(input).sort().join(',') !== 'name,userId' ||
+        typeof input.name !== 'string' || !Number.isSafeInteger(input.userId) || input.userId <= 0)
+      throw Error('请选择有效的归属人和平台账号。');
+    const scope = this.scope();
+    if (!validScope(scope) || !this.canCollect(scope)) throw Error('请先恢复平台管理员授权与目标群绑定。');
+    const profiles = this.usage.ownership?.profiles?.();
+    if (!Array.isArray(profiles) || !profiles.some(row => row.name === input.name && row.userIds.includes(input.userId)))
+      throw Error('所选账号已不在当前归属中，请重新读取。');
+    if (typeof this.usage.readAccount !== 'function') throw Error('单账号读取不可用。');
+    const today = beijingDay(this.now()), month = today.slice(0, 7);
+    const first = Date.parse(`${month}-01T00:00:00Z`);
+    const end = Date.parse(`${today}T00:00:00Z`);
+    const days = [];
+    for (let at = first; at < end; at += DAY_MS) days.push(new Date(at).toISOString().slice(0, 10));
+    this.busy = true;
+    this.accountBackfill = { phase: 'running', month, name: input.name, userId: input.userId,
+      completed: 0, skipped: 0, total: days.length, day: null };
+    const started = this.now();
+    try {
+      for (const day of days) {
+        this.accountBackfill.day = day;
+        if (this.now() - started >= BACKFILL_BUDGET_MS) { this.accountBackfill.phase = 'limited'; break; }
+        const state = this.store.state(scope);
+        const visible = projectSnapshots({ snapshots: state.snapshots[day] ? { [day]: state.snapshots[day] } : {} },
+          this.usage.ownership?.datedProfiles?.() || []).snapshots[day];
+        if (visible?.rows.some(row => row.name === input.name &&
+            row.users.some(user => user.id === input.userId)) ||
+            state.supplements?.[day]?.[input.name]?.[input.userId]) {
+          this.accountBackfill.skipped++; continue;
+        }
+        const otherOwner = visible?.rows.some(row => row.name !== input.name &&
+          row.users.some(user => user.id === input.userId)) ||
+          Object.entries(state.supplements?.[day] || {}).some(([name, accounts]) =>
+            name !== input.name && Object.hasOwn(accounts, input.userId));
+        if (otherOwner) {
+          this.accountBackfill.phase = 'failed';
+          this.accountBackfill.message = '该账号在当前日期已有其他归属的用量记录；为防止重复合计，本次停止，请先人工核对。';
+          return this.accountBackfillStatus();
+        }
+        const result = await this.usage.readAccount(day, input.name, input.userId);
+        const current = this.scope();
+        if (!this.canCollect(current) || current.owner !== scope.owner || current.groupId !== scope.groupId ||
+            result.scope.owner !== scope.owner || result.scope.groupId !== scope.groupId ||
+            result.day !== day || result.name !== input.name || result.user.id !== input.userId ||
+            beijingDay(this.now()) !== today ||
+            JSON.stringify(this.usage.ownership.profiles()) !== JSON.stringify(profiles))
+          throw Error('管理员、目标群、归属或日期已变化。');
+        this.store.append({ type: 'account-backfill', scope, day, profile: input.name,
+          checkedAt: result.checkedAt, user: result.user });
+        this.accountBackfill.completed++;
+      }
+      if (this.accountBackfill.phase === 'running') this.accountBackfill.phase = 'done';
+      return this.accountBackfillStatus();
+    } catch {
+      this.accountBackfill.phase = 'failed';
+      this.accountBackfill.message = '单账号补采在当前日期停止；此前成功日期已保留。请核对管理员授权、归属和平台读取后再续采。';
+      return this.accountBackfillStatus();
+    } finally { this.busy = false; }
+  }
   async backfillCurrentMonth() {
     if (this.busy || this.usage.busy) throw Error('已有每日用量任务，请稍后再补采。');
     const scope = this.scope();

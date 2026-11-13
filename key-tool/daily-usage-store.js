@@ -24,7 +24,7 @@ function validateFailure(value) {
     ...(value.apiCode === undefined ? {} : { apiCode: value.apiCode }) };
 }
 function validateEvent(event) {
-  if (!event || !validScope(event.scope) || !['config','snapshot','attempt','ready','unknown','retired','reviewed-absent'].includes(event.type))
+  if (!event || !validScope(event.scope) || !['config','snapshot','account-backfill','attempt','ready','unknown','retired','reviewed-absent'].includes(event.type))
     throw Error('daily usage event invalid');
   if (event.type === 'config') {
     if (typeof event.enabled !== 'boolean' || event.days !== 3 ||
@@ -58,6 +58,16 @@ function validateEvent(event) {
     return { type: 'snapshot', scope: event.scope, day: event.day,
       checkedAt: event.checkedAt, final: event.final, rows,
       ...(event.source ? { source: event.source } : {}) };
+  }
+  if (event.type === 'account-backfill') {
+    dayKey(event.day);
+    if (!validName(event.profile) || !Number.isFinite(Date.parse(event.checkedAt)) ||
+        !Number.isSafeInteger(event.user?.id) || event.user.id <= 0 ||
+        typeof event.user.email !== 'string' || !event.user.email || event.user.email.length > 254 ||
+        /[\x00-\x1f\x7f]/.test(event.user.email)) throw Error('daily usage account backfill invalid');
+    finiteCost({ total_actual_cost: event.user.cost });
+    return { type: event.type, scope: event.scope, day: event.day, profile: event.profile,
+      checkedAt: event.checkedAt, user: { id: event.user.id, email: event.user.email, cost: event.user.cost } };
   }
   if (!validName(event.profile) || !Number.isFinite(Date.parse(event.at)))
     throw Error('daily usage card state invalid');
@@ -96,10 +106,17 @@ function makeDailyUsageStore(dir, safeStorage, io = fs) {
   const key = scope => `${scope.owner}:${scope.groupId}`;
   function apply(event) {
     const id = key(event.scope);
-    const state = states.get(id) || { enabled: false, days: 3, dailyTime: null, effectiveDay: null, snapshots: {}, cards: {} };
+    const state = states.get(id) || { enabled: false, days: 3, dailyTime: null, effectiveDay: null,
+      snapshots: {}, supplements: Object.create(null), cards: {} };
     if (event.type === 'config') { state.enabled = event.enabled; state.days = event.days;
       state.dailyTime = event.dailyTime; state.effectiveDay = event.effectiveDay; }
     else if (event.type === 'snapshot') state.snapshots[event.day] = event;
+    else if (event.type === 'account-backfill') {
+      state.supplements ||= Object.create(null);
+      state.supplements[event.day] ||= Object.create(null);
+      state.supplements[event.day][event.profile] ||= Object.create(null);
+      state.supplements[event.day][event.profile][event.user.id] = event;
+    }
     else if (event.type === 'attempt') state.cards[event.profile] = { phase: 'attempting',
       action: event.action, messageId: event.messageId, at: event.at, createdAt: event.createdAt };
     else if (event.type === 'ready') state.cards[event.profile] = { phase: 'ready', messageId: event.messageId,
@@ -166,7 +183,7 @@ function makeDailyUsageStore(dir, safeStorage, io = fs) {
     },
     state(scope) {
       if (!loaded || fault || !validScope(scope)) throw failure();
-      return structuredClone(states.get(key(scope)) || { enabled: false, days: 3, dailyTime: null, effectiveDay: null, snapshots: {}, cards: {} });
+      return structuredClone(states.get(key(scope)) || { enabled: false, days: 3, dailyTime: null, effectiveDay: null, snapshots: {}, supplements: {}, cards: {} });
     }
   };
 }

@@ -4,6 +4,8 @@
   const month = el('usage-history-month'), week = el('usage-history-week');
   const person = el('usage-history-person'), root = el('usage-history-table');
   const status = el('usage-history-status');
+  const groupButton = el('usage-group-read'), groupStatus = el('usage-group-status');
+  const groupRoot = el('usage-group-table');
   const collectionStatus = el('usage-history-collection-status');
   const backfillButton = el('usage-history-backfill');
   const backfillStatus = el('usage-history-backfill-status');
@@ -12,10 +14,22 @@
   const exportStart = el('usage-history-export-start'), exportEnd = el('usage-history-export-end');
   const exportStatus = el('usage-history-export-status');
   const exportPerson = el('usage-history-export-person'), exportAll = el('usage-history-export-all');
+  const accountSelect = el('usage-history-account-backfill-user');
+  const accountLabelRefresh = el('usage-history-account-label-refresh');
+  const accountLabelStatus = el('usage-history-account-label-status');
+  const accountBackfillButton = el('usage-history-account-backfill');
+  const accountBackfillStatus = el('usage-history-account-backfill-status');
   let catalog = null, generation = 0, observedSnapshot = false, seenSnapshot = '';
-  let requestedPerson = null;
+  let groupGeneration = 0, groupBusy = false;
+  let requestedPerson = null, accountBusy = false, labelGeneration = 0,
+    labelBusy = 0, labelVerifiedName = '';
   const money = value => `$${Number(value).toFixed(4)}`;
-  const phaseText = { future: '未到', missing: '未记录', ongoing: '进行中', pending: '待补齐', final: '已固定' };
+  const groupMoney = value => {
+    if (typeof value !== 'string' || !/^(?:0|[1-9]\d{0,17})(?:\.\d{1,8})?$/.test(value)) return '金额待核对';
+    const [integer, fraction] = value.split('.');
+    return `$${integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}${fraction === undefined ? '' : `.${fraction}`}`;
+  };
+  const phaseText = { future: '未到', missing: '未记录', ongoing: '进行中', pending: '待补齐', partial: '单账号回填', final: '已固定' };
   const beijingTime = value => new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
   async function refreshCollectionStatus() {
     try {
@@ -52,8 +66,143 @@
     options(week, weeks.map(item => ({ value: item.start, label: `${item.start} — ${item.end}` })),
       '暂无周', preferred || current?.start || weeks.at(-1)?.start);
   }
+  function setAccounts(preferred = '') {
+    const accounts = Object.hasOwn(catalog?.accountsByPerson || {}, person.value) ?
+      catalog.accountsByPerson[person.value] : [];
+    accountSelect.replaceChildren();
+    const empty = document.createElement('option'); empty.value = '';
+    empty.textContent = accounts.length ? '选择当前归属的账号' : '此归属人暂无当前账号'; accountSelect.append(empty);
+    for (const account of accounts) {
+      const option = document.createElement('option'); option.value = String(account.id);
+      const username = typeof account.username === 'string' ? account.username.trim() : '';
+      const email = typeof account.email === 'string' ? account.email.trim() : '';
+      option.textContent = `${[username, email].filter(Boolean).join(' · ') || '名称待同步'} · ID ${account.id}`;
+      option.disabled = !username && !email;
+      accountSelect.append(option);
+    }
+    if ([...accountSelect.options].some(option => option.value === preferred && !option.disabled))
+      accountSelect.value = preferred;
+    accountSelect.disabled = !accounts.length;
+    accountLabelRefresh.disabled = !person.value || Boolean(labelBusy);
+    accountBackfillButton.disabled = accountBusy || labelVerifiedName !== person.value ||
+      !accountSelect.value || accountSelect.selectedOptions[0]?.disabled;
+  }
+  async function loadAccountOptions() {
+    const name = person.value, serial = ++labelGeneration;
+    labelVerifiedName = '';
+    if (!catalog || !name || !Object.hasOwn(catalog.accountsByPerson || {}, name)) {
+      accountLabelStatus.textContent = '当前没有可同步的归属账号。';
+      setAccounts(); return;
+    }
+    labelBusy = serial; accountLabelRefresh.disabled = true;
+    accountBackfillButton.disabled = true;
+    accountLabelStatus.textContent = '正在核对平台用户名和邮箱…';
+    try {
+      const reply = await window.groupAdmin.dailyUsageAccountOptions({ name });
+      if (serial !== labelGeneration || name !== person.value) return;
+      if (!reply.ok) throw Error(reply.message);
+      if (reply.data?.name !== name || !Array.isArray(reply.data.accounts))
+        throw Error('平台账号目录与所选归属不一致。');
+      const ids = new Set(catalog.accountsByPerson[name].map(row => row.id));
+      if (reply.data.accounts.length !== ids.size || reply.data.accounts.some(row =>
+        !Number.isSafeInteger(row.id) || !ids.has(row.id)) ||
+        new Set(reply.data.accounts.map(row => row.id)).size !== ids.size)
+        throw Error('平台账号目录已变化，请重新读取本机记录。');
+      const old = accountSelect.value;
+      catalog.accountsByPerson[name] = reply.data.accounts;
+      labelVerifiedName = name;
+      setAccounts(old);
+      const unresolved = reply.data.accounts.filter(row => !row.email && !row.username).length;
+      accountLabelStatus.textContent = unresolved ?
+        `已同步 ${reply.data.accounts.length} 个账号，其中 ${unresolved} 个仍无可读名称，已禁止选择。` :
+        `已同步 ${reply.data.accounts.length} 个账号的当前用户名与邮箱；请按名称选中，ID 仅供核对。`;
+    } catch (error) {
+      if (serial === labelGeneration) accountLabelStatus.textContent =
+        `账号名称同步失败：${error.message} 请点“同步账号名称”重试；历史表仍可查看。`;
+    } finally {
+      if (serial === labelGeneration) { labelBusy = 0; setAccounts(accountSelect.value); }
+    }
+  }
   function cell(row, tag, value) {
     const node = document.createElement(tag); node.textContent = value; row.append(node); return node;
+  }
+  function invalidateGroup() {
+    groupGeneration++;
+    groupRoot.replaceChildren();
+    groupStatus.textContent = '当前选择已变化，请点击“读取所选周的分组用量”。';
+  }
+  function renderGroup(data) {
+    groupRoot.replaceChildren();
+    if (!data || !Array.isArray(data.days) || !Array.isArray(data.groups) || !Array.isArray(data.rows) ||
+        data.days.length !== 7 || data.complete !== true) throw Error('分组用量未完整返回，请缩小范围后重试。');
+    const title = document.createElement('h4'); title.id = 'usage-group-table-title';
+    title.className = 'usage-history-table-title';
+    title.textContent = `${person.value} · ${data.start} 至 ${data.end} · 每日每分组用户实付（USD）`;
+    const scroll = document.createElement('div'); scroll.className = 'usage-history-table-scroll';
+    const table = document.createElement('table'); table.className = 'usage-history-table usage-group-table';
+    table.setAttribute('aria-labelledby', title.id);
+    const head = document.createElement('thead'), dates = document.createElement('tr');
+    for (const label of ['归属姓名', '平台账号邮箱', '当前授权分组']) {
+      const th = cell(dates, 'th', label); th.rowSpan = 2;
+    }
+    for (const day of data.days) {
+      const th = cell(dates, 'th', `${day.day} · ${phaseText[day.phase] || '待核对'}`);
+      th.colSpan = Math.max(1, data.groups.length);
+    }
+    const groups = document.createElement('tr');
+    for (const day of data.days) {
+      if (!data.groups.length) cell(groups, 'th', '无实际使用分组');
+      else for (const group of data.groups)
+        cell(groups, 'th', `${group.name || '未命名分组'} · ID ${group.id}`);
+    }
+    head.append(dates, groups); table.append(head);
+    const body = document.createElement('tbody');
+    for (const row of data.rows) {
+      if (!Number.isSafeInteger(row.id) || !Array.isArray(row.values) || row.values.length !== 7)
+        throw Error('分组用量账号行不完整。');
+      const tr = document.createElement('tr');
+      cell(tr, 'th', row.name || person.value);
+      cell(tr, 'td', `${row.email || '邮箱待同步'} · ID ${row.id}`);
+      const explicit = Array.isArray(row.allowedGroups) && row.allowedGroups.length ?
+        row.allowedGroups.map(group => `${group.name || '未命名分组'}（ID ${group.id}）`).join('、') : null;
+      const allowed = row.allowedGroups === null ? '当前授权未取得' :
+        `${explicit || '未单独授权分组'}；${row.accessMode === 'all-nonexclusive' || row.restrictPublicGroups === false ?
+          '公共组可用（依平台规则）' : row.restrictPublicGroups === true ? '公共组已限制' : '公共组权限待核对'}`;
+      cell(tr, 'td', allowed);
+      for (const [index, day] of data.days.entries()) {
+        if (!data.groups.length) { cell(tr, 'td', row.values[index] === null ?
+          day.phase === 'future' ? '未到' : '未归属' : '无使用记录'); continue; }
+        for (const group of data.groups) {
+        const values = row.values[index];
+        const raw = values === null ? null : values?.[String(group.id)] ?? '0';
+        const td = cell(tr, 'td', raw === null ? day.phase === 'future' ? '未到' : '未归属' : groupMoney(raw));
+        if (raw === null) td.className = 'usage-group-unassigned';
+        else if (raw === '0') td.className = 'usage-group-zero';
+        }
+      }
+      body.append(tr);
+    }
+    if (!data.rows.length) {
+      const tr = document.createElement('tr'), td = cell(tr, 'td', '所选归属人此周没有可统计的账号。');
+      td.colSpan = 3 + 7 * Math.max(1, data.groups.length); body.append(tr);
+    }
+    table.append(body); scroll.append(table); groupRoot.append(title, scroll);
+    groupStatus.textContent = `平台使用记录已完整读取：${data.rows.length} 个账号、${data.groups.length} 个展示分组（含当前授权）；按北京时间逐日展示。` +
+      (data.accessWarning ? ` ${data.accessWarning}` : '');
+  }
+  async function readGroupWeek() {
+    if (groupBusy || !catalog || !week.value || !person.value) return;
+    const serial = ++groupGeneration, selected = { month: month.value, weekStart: week.value, name: person.value };
+    groupBusy = true; groupButton.disabled = true; groupRoot.replaceChildren();
+    groupStatus.textContent = '正在逐页读取平台使用记录，核对用户、日期和实际分组…';
+    try {
+      const reply = await window.groupAdmin.dailyUsageGroupWeek(selected);
+      if (serial !== groupGeneration || selected.weekStart !== week.value || selected.name !== person.value) return;
+      if (!reply?.ok) throw Error(reply?.message || '平台使用记录读取失败。');
+      renderGroup(reply.data);
+    } catch (error) {
+      if (serial === groupGeneration) groupStatus.textContent = `分组用量未完成：${error.message}`;
+    } finally { groupBusy = false; groupButton.disabled = false; }
   }
   function render(data) {
     root.replaceChildren();
@@ -96,6 +245,7 @@
       (recorded.length ? ` 最近采样（北京时间）：${new Date(recorded.at(-1)).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}。` : ' 本周尚无采样。');
   }
   async function readWeek() {
+    invalidateGroup();
     const serial = ++generation; root.replaceChildren();
     if (!catalog || !week.value || !person.value) { status.textContent = '暂无可选归属人或周记录。'; return; }
     status.textContent = '正在读取本机加密历史记录…';
@@ -108,8 +258,13 @@
     } catch (error) { if (serial === generation) status.textContent = `历史用量读取失败：${error.message}`; }
   }
   async function refresh() {
+    invalidateGroup();
     const serial = ++generation;
-    const previous = { month: month.value, week: week.value, person: requestedPerson || person.value };
+    labelGeneration++; labelBusy = 0; labelVerifiedName = '';
+    accountBackfillButton.disabled = true; accountLabelRefresh.disabled = true;
+    accountLabelStatus.textContent = '正在读取当前归属账号，随后同步平台名称…';
+    const previous = { month: month.value, week: week.value, person: requestedPerson || person.value,
+      account: requestedPerson ? '' : accountSelect.value };
     requestedPerson = null;
     catalog = null; root.replaceChildren(); status.textContent = '正在读取本机可用的历史月份与归属人…';
     month.disabled = true; week.disabled = true; person.disabled = true;
@@ -127,14 +282,22 @@
       options(month, catalog.months.map(value => ({ value, label: value })), '暂无月份', previous.month);
       setWeeks(previous.week);
       options(person, catalog.names.map(value => ({ value, label: value })), '暂无归属人', previous.person);
+      setAccounts(previous.account);
+      void loadAccountOptions();
       void readWeek();
       void refreshCollectionStatus();
     } catch (error) { if (serial === generation) status.textContent = `历史目录读取失败：${error.message}`; }
   }
   month.addEventListener('change', () => { setWeeks(); void readWeek(); });
   week.addEventListener('change', () => void readWeek());
-  person.addEventListener('change', () => void readWeek());
+  person.addEventListener('change', () => { setAccounts(); void readWeek(); void loadAccountOptions(); });
+  accountSelect.addEventListener('change', () => {
+    accountBackfillButton.disabled = accountBusy || labelVerifiedName !== person.value ||
+      !accountSelect.value || accountSelect.selectedOptions[0]?.disabled;
+  });
+  accountLabelRefresh.addEventListener('click', () => { if (!labelBusy) void loadAccountOptions(); });
   el('usage-history-refresh').addEventListener('click', () => void refresh());
+  groupButton.addEventListener('click', () => void readGroupWeek());
   collectTodayButton.addEventListener('click', async () => {
     if (collectTodayButton.disabled) return;
     collectTodayButton.disabled = true;
@@ -173,7 +336,10 @@
       });
       if (!reply.ok) throw Error(reply.message);
       exportStatus.textContent = reply.data.canceled ? '已取消导出，未写入文件。' :
-        `已导出 ${reply.data.fileName}：${reply.data.people} 位归属人、${reply.data.days} 个日期列、${reply.data.rows} 个账号行。请妥善保管含邮箱的文件。`;
+        `已导出 ${reply.data.fileName}：${reply.data.people} 位归属人、${reply.data.days} 个日期列、${reply.data.rows} 个账号行。` +
+        (reply.data.groupIncluded === true ? ' 已包含平台分组用量工作表。' :
+          reply.data.groupIncluded === false ? ' 本次未读取分组用量；分组工作表已标注缺失。' : '') +
+        ' 请妥善保管含邮箱的文件。';
     } catch (error) { exportStatus.textContent = `导出失败：${error.message}`; }
     finally { exportPerson.disabled = false; exportAll.disabled = false; }
   }
@@ -209,11 +375,45 @@
     }
     finally { backfillButton.disabled = false; }
   });
+  async function showAccountBackfillStatus() {
+    try {
+      const reply = await window.groupAdmin.dailyUsageAccountBackfillStatus();
+      if (!reply.ok) throw Error(reply.message);
+      const job = reply.data;
+      accountBackfillButton.disabled = accountBusy || job.phase === 'running' ||
+        labelVerifiedName !== person.value || !accountSelect.value || accountSelect.selectedOptions[0]?.disabled;
+      if (job.phase === 'idle') return;
+      accountBackfillStatus.textContent = `${job.month} · ${job.name || '归属待确认'} · 账号 ID ${job.userId || '—'} 单账号补采：${job.phase === 'running' ? '进行中' :
+        job.phase === 'done' ? '完成' : job.phase === 'limited' ? '到达时间上限，可再次续采' : '已停止'}。` +
+        ` 已补 ${job.completed} 天，跳过已有 ${job.skipped} 天，共 ${job.total} 天；当前 ${job.day || '—'}。` +
+        (job.message || '只按当前归属回填此账号，不重读其他账号，也不发群。');
+    } catch { accountBackfillStatus.textContent = '单账号补采状态暂不可读取，请核对管理员授权。'; }
+  }
+  accountBackfillButton.addEventListener('click', async () => {
+    const name = person.value, userId = Number(accountSelect.value);
+    const accounts = Object.hasOwn(catalog?.accountsByPerson || {}, name) ? catalog.accountsByPerson[name] : [];
+    if (accountBackfillButton.disabled || !accounts.some(account => account.id === userId)) return;
+    if (!confirm(`确认只补“${name}”的账号 ID ${userId} 在本月已结束日期的缺失用量？加入归属前的用量会计入“${name}”历史合计，并标“按当前归属回填”；不重读其他账号、不发群。`)) return;
+    accountBusy = true; accountBackfillButton.disabled = true;
+    accountBackfillStatus.textContent = '正在逐日读取所选账号缺失的历史金额，请勿重复点击。';
+    try {
+      const reply = await window.groupAdmin.dailyUsageAccountBackfillCurrentMonth({ name, userId });
+      if (!reply.ok) throw Error(reply.message);
+      await showAccountBackfillStatus();
+      if (['done','limited'].includes(reply.data.phase)) await refresh();
+    } catch (error) {
+      accountBackfillStatus.textContent = `单账号补采未完成：${error.message}`;
+      await showAccountBackfillStatus();
+      void refresh();
+    }
+    finally { accountBusy = false; setAccounts(accountSelect.value); }
+  });
   setInterval(() => { if (!el('usage-history').hidden) void showBackfillStatus(); }, 2000);
+  setInterval(() => { if (!el('usage-history').hidden) void showAccountBackfillStatus(); }, 2000);
   setInterval(() => { if (!el('usage-history').hidden) void refreshCollectionStatus(); }, 60000);
   window.addEventListener('admin-view-change', event => {
-    if (event.detail.view === 'usage-history') { void refresh(); void showBackfillStatus(); void refreshCollectionStatus(); }
-    else if (event.detail.previous === 'usage-history') { generation++; root.replaceChildren(); }
+    if (event.detail.view === 'usage-history') { void refresh(); void showBackfillStatus(); void showAccountBackfillStatus(); void refreshCollectionStatus(); }
+    else if (event.detail.previous === 'usage-history') { generation++; root.replaceChildren(); invalidateGroup(); }
   });
   window.groupAdmin.onOwnershipChanged?.(() => {
     if (!el('usage-history').hidden) void refresh();

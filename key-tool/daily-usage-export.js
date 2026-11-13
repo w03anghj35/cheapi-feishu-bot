@@ -3,13 +3,141 @@ const ExcelJS = require('exceljs');
 const { dayKey } = require('./daily-usage');
 const { historyCatalog } = require('./daily-usage-history');
 const { projectSnapshots, datedIds } = require('./ownership-dates');
+const { supplementedUsers } = require('./daily-usage-supplements');
 
 const DAY_MS = 24 * 60 * 60_000;
 const MAX_DAYS = 366;
 const MAX_ROWS = 150_000;
 const MAX_WIDE_CELLS = 500_000;
-const phaseLabel = { future: '未到', missing: '未记录', ongoing: '进行中', pending: '待补齐', final: '已固定' };
+const phaseLabel = { future: '未到', missing: '未记录', ongoing: '进行中', pending: '待补齐', partial: '单账号回填', final: '已固定' };
 const amountFormat = '#,##0.0000';
+const groupAmount = /^(?:0|[1-9]\d{0,17})(?:\.\d{1,8})?$/;
+
+function appendGroupSheet(workbook, data, groupData) {
+  const sheet = workbook.addWorksheet('分组用量', {
+    views: [{ state: 'frozen', xSplit: 3, ySplit: 3, showGridLines: false }]
+  });
+  if (groupData === undefined || groupData === null) {
+    sheet.getColumn(1).width = 72;
+    sheet.addRow(['分组使用记录未读取，不能从旧每日总额拆分。']);
+    return;
+  }
+  if (!groupData || groupData.complete !== true || groupData.start !== data.start ||
+      groupData.end !== data.end || !Array.isArray(groupData.days) ||
+      !Array.isArray(groupData.groups) || !Array.isArray(groupData.rows) ||
+      groupData.days.length !== data.count || data.count > 31)
+    throw Error('分组用量与导出日期或读取状态不一致，请重新查询。');
+  const days = Array.from({ length: data.count }, (_, index) =>
+    new Date(Date.parse(`${data.start}T00:00:00Z`) + index * DAY_MS).toISOString().slice(0, 10));
+  if (groupData.days.some((item, index) => item?.day !== days[index] ||
+      !['final', 'ongoing', 'future'].includes(item.phase)))
+    throw Error('分组用量日期不完整，请重新查询。');
+  const groupKeys = new Set();
+  for (const group of groupData.groups) {
+    if (!group || !(group.id === 'ungrouped' || Number.isSafeInteger(group.id) && group.id > 0) ||
+        typeof group.name !== 'string' || !group.name || group.name.length > 200 ||
+        /[\x00-\x1f\x7f]/.test(group.name) || groupKeys.has(String(group.id)))
+      throw Error('分组用量的分组目录无效。');
+    groupKeys.add(String(group.id));
+  }
+  const groupColumns = Math.max(1, groupData.groups.length);
+  const columns = 3 + data.count * groupColumns;
+  if (columns > 16384 || (groupData.rows.length + 5) * columns > MAX_WIDE_CELLS)
+    throw Error('分组用量表过大，请缩短日期或归属范围。');
+  const selectedOwners = new Set(data.rows.map(row => row.name));
+  const selectedAccounts = new Set(data.rows.filter(row => row.id !== null)
+    .map(row => `${row.name}\u0000${row.id}`));
+  const accounts = new Set(), rowsByOwner = new Map();
+  for (const row of groupData.rows) {
+    if (!row || typeof row.name !== 'string' || !selectedOwners.has(row.name) ||
+        !Number.isSafeInteger(row.id) || row.id <= 0 || typeof row.email !== 'string' ||
+        row.email.length > 254 || !Array.isArray(row.values) || row.values.length !== data.count ||
+        !(row.allowedGroups === null || Array.isArray(row.allowedGroups)))
+      throw Error('分组用量账号行无效。');
+    const identity = `${row.name}\u0000${row.id}`;
+    if (!selectedAccounts.has(identity) || accounts.has(identity))
+      throw Error('分组用量账号不在导出范围或重复。');
+    accounts.add(identity);
+    if (row.allowedGroups?.some(group => !group ||
+        !Number.isSafeInteger(group.id) || group.id <= 0 || typeof group.name !== 'string'))
+      throw Error('当前授权分组字段无效。');
+    for (const [index, values] of row.values.entries()) {
+      if (values === null) continue;
+      if (groupData.days[index].phase === 'future' || !values || typeof values !== 'object' || Array.isArray(values) ||
+          Object.keys(values).some(key => !groupKeys.has(key) || typeof values[key] !== 'string' ||
+            !groupAmount.test(values[key])))
+        throw Error('分组用量金额或归属日期无效。');
+    }
+    const ownerRows = rowsByOwner.get(row.name) || [];
+    ownerRows.push(row); rowsByOwner.set(row.name, ownerRows);
+  }
+  sheet.getColumn(1).width = 22;
+  sheet.getColumn(2).width = 38;
+  sheet.getColumn(3).width = 42;
+  for (let column = 4; column <= columns; column++) sheet.getColumn(column).width = 20;
+  const dateHeader = sheet.addRow(['归属姓名', '平台账号邮箱', '当前授权分组（非历史授权）']);
+  dateHeader.height = 30;
+  const groupHeader = sheet.addRow([null, null, null]);
+  const phaseHeader = sheet.addRow([null, null, null]);
+  for (let index = 0; index < days.length; index++) {
+    if (!groupData.groups.length) {
+      const column = 4 + index;
+      dateHeader.getCell(column).value = new Date(`${days[index]}T00:00:00Z`);
+      dateHeader.getCell(column).numFmt = 'yyyy-mm-dd';
+      groupHeader.getCell(column).value = '无实际使用分组';
+      phaseHeader.getCell(column).value = groupData.days[index].phase === 'final' ? '已结束' :
+        groupData.days[index].phase === 'ongoing' ? '进行中' : '未到';
+    }
+    for (const [groupIndex, group] of groupData.groups.entries()) {
+      const column = 4 + index * groupData.groups.length + groupIndex;
+      dateHeader.getCell(column).value = new Date(`${days[index]}T00:00:00Z`);
+      dateHeader.getCell(column).numFmt = 'yyyy-mm-dd';
+      groupHeader.getCell(column).value = `${group.name}（ID ${group.id}）`;
+      phaseHeader.getCell(column).value = groupData.days[index].phase === 'final' ? '已结束' :
+        groupData.days[index].phase === 'ongoing' ? '进行中' : '未到';
+    }
+  }
+  for (const header of [dateHeader, groupHeader, phaseHeader]) header.eachCell({ includeEmpty: true }, cell => {
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: header === dateHeader ? 'FF285A79' : 'FFEAF1F6' } };
+    cell.font = { name: 'Arial', size: 10, bold: true,
+      color: { argb: header === dateHeader ? 'FFFFFFFF' : 'FF36536A' } };
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  });
+  for (const [name, ownerRows] of rowsByOwner) {
+    const band = sheet.addRow([name]); band.height = 23;
+    for (let column = 1; column <= Math.max(3, columns); column++) {
+      const cell = band.getCell(column);
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF5D9CC5' } };
+      cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    }
+    for (const row of ownerRows) {
+      const currentAccess = row.allowedGroups === null ? '当前授权未取得' :
+        row.allowedGroups.length ? row.allowedGroups.map(group => `${group.name}（ID ${group.id}）`).join('、') :
+          row.accessMode === 'all-nonexclusive' || row.restrictPublicGroups === false ?
+            '未单独授权分组；公共组可用（依平台规则）' : '当前未单独授权分组';
+      const cells = [name, row.email, currentAccess];
+      for (const values of row.values) {
+        if (!groupData.groups.length) cells.push(values === null ? null : '无使用记录');
+        else for (const group of groupData.groups)
+          cells.push(values === null ? null : values[String(group.id)] ?? '0');
+      }
+      const record = sheet.addRow(cells); record.height = 23;
+      record.font = { name: 'Arial', size: 10, color: { argb: 'FF273640' } };
+      for (let column = 4; column <= columns; column++) {
+        const cell = record.getCell(column);
+        cell.numFmt = '@';
+        cell.alignment = { vertical: 'middle', horizontal: 'right' };
+        if (cell.value !== null) cell.font = { name: 'Arial', size: 10, color: { argb: 'FF149652' } };
+      }
+    }
+  }
+  const note = sheet.addRow(['金额保留平台八位十进制精度，以文本存储；空白表示不在归属期或未到日期，0 表示完整读取后无该组用量。当前授权分组不是历史使用分组，实际分组以列标题的分组 ID 为准。']);
+  note.height = 48;
+  sheet.mergeCells(note.number, 1, note.number, Math.min(Math.max(3, columns), 8));
+  note.getCell(1).font = { name: 'Arial', size: 9, italic: true, color: { argb: 'FF536B7A' } };
+  note.getCell(1).alignment = { vertical: 'middle', wrapText: true };
+  sheet.autoFilter = { from: { row: 2, column: 1 }, to: { row: note.number - 1, column: Math.max(3, columns) } };
+}
 
 function exportRows(state, input, today, currentNames = [], datedProfiles = []) {
   state=projectSnapshots(state,datedProfiles);
@@ -29,19 +157,20 @@ function exportRows(state, input, today, currentNames = [], datedProfiles = []) 
     const snapshot = state?.snapshots?.[day];
     for (const name of selected) {
       const profile = snapshot?.rows.find(row => row.name === name);
-      const phase = day > today ? 'future' : !profile ? 'missing' : snapshot.final ? 'final' : day < today ? 'pending' : 'ongoing';
-      const users = [...(profile?.users || [])];
+      const extra = supplementedUsers(state, day, name, profile?.users || []);
+      const phase = day > today ? 'future' : !profile && extra.supplemented ? 'partial' : !profile ? 'missing' : snapshot.final ? 'final' : day < today ? 'pending' : 'ongoing';
+      const users = [...extra.users];
       const datedProfile=datedProfiles.find(p=>p.name===name);
       if(day<=today)for(const id of datedIds(datedProfile,day) || [])if(!users.some(u=>u.id===id))
         users.push({id,email:datedProfile.membership?.labels?.find(u=>u.id===id)?.email || `平台用户 ID ${id}`,cost:null});
       const missing=users.some(u=>u.cost===null);
-      const total = profile && (!users.length || users.some(u=>u.cost!==null)) ? users.reduce((sum, user) => sum + (user.cost ?? 0), 0) : null;
-      const source = profile ? snapshot.source === 'backfill-current-ownership' ? '按当前归属回填' : '定时采集' : '';
-      const checkedAt = profile ? snapshot.checkedAt : null;
+      const total = (profile || extra.supplemented) && (!users.length || users.some(u=>u.cost!==null)) ? users.reduce((sum, user) => sum + (user.cost ?? 0), 0) : null;
+      const source = extra.supplemented || snapshot?.source === 'backfill-current-ownership' ? '按当前归属回填' : profile ? '定时采集' : '';
+      const checkedAt = [profile ? snapshot.checkedAt : null, extra.checkedAt].filter(Boolean).sort().at(-1) || null;
       for (const [index, user] of (users.length ? users : [null]).entries()) {
         rows.push({ day, name, id: user?.id ?? null, email: user?.email ?? '', cost: user?.cost ?? null,
           dailyTotal: index === 0 ? total : null, phase: phaseLabel[phase],
-          totalKind: index === 0 && profile ? snapshot.final && !missing ? '完整日' : '已记录小计' : '',
+          totalKind: index === 0 && (profile || extra.supplemented) ? snapshot?.final && !missing ? '完整日' : '已记录小计' : '',
           source, checkedAt });
         if (rows.length > MAX_ROWS) throw Error('导出行数过多，请缩短日期范围后重试。');
       }
@@ -81,6 +210,7 @@ function wideLayout(data) {
     throw Error('横向日表过大，请缩短导出日期范围。');
   const statusText = ({ phases, backfilled }) => {
     const label = phases.has('待补齐') ? '待补齐' : phases.has('进行中') ? '进行中' :
+      phases.has('单账号回填') ? '部分已记录' :
       phases.has('已固定') && phases.has('未记录') ? '部分已记录' :
       phases.has('已固定') ? '已固定' : phases.has('未到') ? '未到' : '未记录';
     return backfilled ? `${label} · 回填` : label;
@@ -89,7 +219,7 @@ function wideLayout(data) {
     statuses: dates.map(day => statusText(dayStatus.get(day))) };
 }
 
-async function exportWorkbook(data) {
+async function exportWorkbook(data, groupData) {
   const layout = wideLayout(data);
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Cheapi Feishu Bot';
@@ -193,6 +323,7 @@ async function exportWorkbook(data) {
   note.getCell(1).font = { name: 'Arial', size: 9, italic: true, color: { argb: 'FF536B7A' } };
   note.getCell(1).alignment = { vertical: 'middle', wrapText: true };
   sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: note.number - 1, column: lastColumn } };
+  appendGroupSheet(workbook, data, groupData);
   return workbook.xlsx.writeBuffer();
 }
 

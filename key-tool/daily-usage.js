@@ -101,5 +101,33 @@ class DailyUsage {
         final: date < beijingDay(this.now()), rows };
     } finally { this.busy = false; }
   }
+  async readAccount(day, name, userId) {
+    if (this.busy) throw new Error('已有每日用量读取任务。');
+    const date = dayKey(day);
+    if (date >= beijingDay(this.now())) throw new Error('单账号历史补采只允许已结束日期。');
+    if (typeof name !== 'string' || !name || !Number.isSafeInteger(userId) || userId <= 0)
+      throw new Error('请选择有效的归属人和平台账号。');
+    this.busy = true;
+    const startedAt = this.now();
+    try {
+      const scope = await this.ownership.admin();
+      const profiles = this.ownership.profiles();
+      if (!profiles.some(row => row.name === name && row.userIds.includes(userId)))
+        throw new Error('账号已不属于所选归属人，请重新读取。');
+      const users = await this.ownership.users();
+      const user = users.find(row => row.id === userId && row.role === 'user');
+      if (!user) throw new Error('平台账号已不存在，请重新读取。');
+      const stats = await this.request('GET', statsRoute(userId, date));
+      const cost = finiteCost(stats);
+      if (this.now() - startedAt >= this.maxDurationMs) throw new Error('单账号读取超过本次时间上限。');
+      const verified = await this.ownership.admin();
+      if (verified.owner !== scope.owner || verified.groupId !== scope.groupId ||
+          JSON.stringify(this.ownership.profiles()) !== JSON.stringify(profiles) ||
+          beijingDay(this.now()) <= date)
+        throw new Error('管理员、目标群、归属或日期已变化，本次不保存。');
+      return { day: date, scope, name, checkedAt: snapshotStamp(this.now()),
+        user: { id: userId, email: user.email, cost } };
+    } finally { this.busy = false; }
+  }
 }
 module.exports = { DailyUsage, MAX_PROFILES, MAX_USERS, dayKey, beijingDay, statsRoute, finiteCost };

@@ -55,6 +55,22 @@ test('past partial day export says pending finalization while preserving recorde
   assert.equal(data.rows[0].totalKind, '已记录小计');
   assert.equal(data.rows[0].cost, 1.25);
 });
+test('single-account supplement exports pre-assignment cost without fabricating a complete day', () => {
+  const input = { snapshots: {}, supplements: { '2026-11-02': { '甲': {
+    7: { day: '2026-11-02', profile: '甲', checkedAt: '2026-11-04T08:00:00Z',
+      user: { id: 7, email: 'seven@example.invalid', cost: 5 } } } } } };
+  const dated = [{ name: '甲', userIds: [7], membership: { baselineIds: [],
+    changes: [{ day: '2026-11-04', userIds: [7] }] } }];
+  const result = exportRows(input, {scope:'person',name:'甲',start:'2026-11-02',end:'2026-11-02'},
+    '2026-11-04', ['甲'], dated);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].cost, 5);
+  assert.equal(result.rows[0].dailyTotal, 5);
+  assert.equal(result.rows[0].source, '按当前归属回填');
+  assert.equal(result.rows[0].phase, '单账号回填');
+  assert.equal(result.rows[0].totalKind, '已记录小计');
+  assert.deepEqual(wideLayout(result).statuses, ['部分已记录 · 回填']);
+});
 
 test('XLSX roundtrip has names at left, one selected date per column, and owner/daily totals', async () => {
   const data = exportRows(state, { scope: 'all', start: '2026-11-02', end: '2026-11-05' }, today);
@@ -66,7 +82,8 @@ test('XLSX roundtrip has names at left, one selected date per column, and owner/
   assert.ok(buffer.length > 2000);
   const book = new ExcelJS.Workbook();
   await book.xlsx.load(buffer);
-  assert.equal(book.worksheets.length, 1);
+  assert.equal(book.worksheets.length, 2);
+  assert.match(book.getWorksheet('分组用量').getCell('A1').value, /未读取/);
   const sheet = book.getWorksheet('用量明细');
   assert.equal(sheet.rowCount, 11);
   assert.equal(sheet.columnCount, 7);

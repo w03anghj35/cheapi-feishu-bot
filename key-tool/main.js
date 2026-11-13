@@ -6,6 +6,10 @@ const { KeyService, ToolError } = require('./service');
 const { makeDiskStore } = require('./disk-store');
 const { UserRegistrationService, assertRegistrationBody } = require('./user-registration-service');
 const { GroupSettingsService, groupRequest } = require('./group-settings-service');
+const { BulkGroupRatesService } = require('./bulk-group-rates');
+const { readBulkRateSelectionFile } = require('./bulk-rate-import');
+const { extractDocumentEmails } = require('./bulk-rate-document-extract');
+const { makeBulkRateStore } = require('./bulk-rate-store');
 const { UserOwnership, makeOwnershipStore } = require('./user-ownership');
 const { makeOwnershipQueryAudit } = require('./ownership-query-audit');
 const { makeOwnershipDraftStore } = require('./ownership-draft');
@@ -16,6 +20,9 @@ const { MemberUsageQuery } = require('./member-usage-query');
 const { reviewAbsentAction } = require('./daily-usage-review');
 const { exportWorkbook, wideLayout } = require('./daily-usage-export');
 const { AccountSchedule, makeAccountScheduleStore } = require('./account-schedule');
+const { RechargeQuery } = require('./recharge-query');
+const { UserBalanceQuery } = require('./user-balance');
+const { GroupUsage } = require('./group-usage');
 const { makeCatalogStore } = require('./group-catalog');
 const { makeSessionStore } = require('./session-store');
 const { AdminSession } = require('./auth-session');
@@ -33,6 +40,10 @@ const { FeishuMemberNames } = require('./feishu-member-names');
 const { makeRecordTable } = require('./record-table');
 const { classifyPlatformError, readPlatformError } = require('./platform-error');
 const { CHANNELS, makeNameStore, safeName } = require('./channel-monitor');
+const { makeChannelFactorStore, normalizeRate } = require('./channel-factor-store');
+const { calculateMonitoredSuppliers } = require('./finance-metrics');
+const { makeFinanceHttpConfigStore } = require('./finance-http-config-store');
+const { makeFinanceHttpController, PORT: FINANCE_HTTP_PORT } = require('./finance-http-controller');
 const { createChannelHost } = require('./channel-monitor-host');
 const { ChannelMonitorController } = require('./channel-monitor-controller');
 const { ChannelAlert, makeAlertStore, validate: validateChannelAlert } = require('./channel-alert');
@@ -41,15 +52,17 @@ const { makeChannelLoginStore, validate: validateChannelLogin } = require('./cha
 const SITE = 'https://max.cheapi.cc';
 const dataDir = path.join(app.getPath('appData'), 'CheapiKeyStudio');
 app.setPath('userData', dataDir);
-const testMode = process.argv.includes('--fixture-test');
+const financeFixtureMode = process.argv.includes('--fixture-finance-test');
+const testMode = process.argv.includes('--fixture-test') || financeFixtureMode;
 const adminLoginMode = process.argv.includes('--admin-login');
 const adminGroupsMode = process.argv.includes('--admin-groups');
-if (testMode) app.setPath('userData', path.join(__dirname, '..', '.runtime', 'key-tool-fixture'));
+if (testMode) app.setPath('userData', path.join(__dirname, '..', '.runtime', financeFixtureMode ? 'key-tool-fixture-finance' : 'key-tool-fixture'));
 if (!app.requestSingleInstanceLock()) app.exit(0);
 let ui, adminUI, login, loginReady, apiSession, service, auth, completingLogin, loginLoadFailed = false, copiedKey = '', closing = false, userOwnership, ownershipDraft, accountSchedule, dailyUsagePublisher, memberUsageQuery;
 let feishuConnection, feishuReconnect, feishuWorkflow, feishuPolicyStore, feishuPolicy = emptyPolicy(), feishuPolicyError = false;
-let failureLog, registrationService, groupSettingsService, adminOperationLog, memberNames, channelMonitor, channelHost, channelLoginStores, channelAlert, channelAccess;
-let recordTable,tableTimer,tablePreparationError=false;
+let failureLog, registrationService, groupSettingsService, bulkGroupRates, bulkGroupRatesFault = false, adminOperationLog, memberNames, channelMonitor, channelHost, channelLoginStores, channelAlert, channelAccess, channelFactorStore;
+let recordTable,tableTimer,tablePreparationError=false,rechargeQuery,groupUsage,userBalanceQuery,financeHttpConfigStore,financeHttpController;
+let financeQuitReady = false;
 const recordTableDir=path.join(__dirname,'..','本机数据');
 function syncRecordTable(){
   if(!recordTable)return null;
@@ -250,18 +263,24 @@ async function fetchPlatform(token, method, route, body) {
 async function request(method, route, body, context = {}) {
   const groupRoute = groupRequest(method, route, body) || (method === 'GET' && /^\/admin\/users\?page=(?:[1-9]|[1-4]\d|50)&page_size=100$/.test(route));
   const usageRoute = method === 'GET' && /^\/admin\/usage\/stats\?user_id=[1-9]\d*&start_date=\d{4}-\d{2}-\d{2}&end_date=\d{4}-\d{2}-\d{2}$/.test(route);
+  const groupUsageRoute = context.groupUsage === true && method === 'GET' &&
+    /^\/admin\/usage\?user_id=[1-9]\d*&page=(?:[1-9]|[1-9]\d|100)&page_size=100&start_date=\d{4}-\d{2}-\d{2}&end_date=\d{4}-\d{2}-\d{2}&timezone=Asia%2FShanghai&sort_by=created_at&sort_order=desc&exact_total=true$/.test(route);
   const accountRoute = method === 'GET' && (/^\/admin\/accounts\?page=(?:[1-9]|[1-4]\d|50)&page_size=100$/.test(route) || /^\/admin\/accounts\/[1-9]\d*$/.test(route)) ||
     method === 'POST' && /^\/admin\/accounts\/[1-9]\d*\/schedulable$/.test(route) &&
       body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).length === 1 &&
       typeof body.schedulable === 'boolean' && context.accountSchedule === true;
-  if (!groupRoute && !accountRoute && !usageRoute && !(method === 'POST' && ['/keys', '/admin/users'].includes(route)) && !(method === 'GET' &&
+  const rechargeRoute = context.rechargeQuery === true && method === 'GET' &&
+    (/^\/admin\/users\/[1-9]\d*\/balance-history\?page=(?:[1-9]|[1-3]\d|40)&page_size=15$/.test(route) ||
+      /^\/admin\/audit-logs\?page=(?:[1-9]|[1-9]\d|100)&page_size=20&q=%2Fadmin%2Fusers%2F(?:[1-9]\d*%2Fbalance)?$/.test(route) ||
+      /^\/admin\/audit-logs\/[1-9]\d*$/.test(route));
+  if (!groupRoute && !accountRoute && !usageRoute && !groupUsageRoute && !rechargeRoute && !(method === 'POST' && ['/keys', '/admin/users'].includes(route)) && !(method === 'GET' &&
     (['/auth/me','/groups/available'].includes(route) || /^\/keys\?(?:page=1&page_size=100&search=).+$/.test(route) || /^\/keys\/\d+$/.test(route)))) {
     throw new ToolError('ROUTE', '该接口不在工具允许范围内。');
   }
   if (route === '/admin/users') assertRegistrationBody(body);
   const credential = await auth.ensure();
   try {
-    if (method === 'POST' || groupRoute || accountRoute || usageRoute) {
+    if (method === 'POST' || groupRoute || accountRoute || usageRoute || groupUsageRoute || rechargeRoute) {
       // Bind the actual POST credential to the reviewed account, not a previous UI snapshot.
       let me;
       try { me = await fetchPlatform(credential.token, 'GET', '/auth/me'); }
@@ -269,7 +288,7 @@ async function request(method, route, body, context = {}) {
       if ((method !== 'GET' && Number(me?.id) !== context.owner) || Number(me?.id) !== credential.owner) {
         const e = new ToolError('AUTH', '服务账户已变化或授权已失效，请联系管理员。'); e.definitive = true; throw e;
       }
-      if ((route === '/admin/users' || groupRoute || accountRoute || usageRoute) && me?.role !== 'admin') {
+      if ((route === '/admin/users' || groupRoute || accountRoute || usageRoute || groupUsageRoute || rechargeRoute) && me?.role !== 'admin') {
         const e = new ToolError('DENIED', '该授权不是平台管理员，未提交注册。'); e.definitive = true; throw e;
       }
       if ((route === '/admin/users' || method === 'PUT' || (method === 'POST' && accountRoute)) && context.guard?.() !== true) {
@@ -311,7 +330,12 @@ app.on('second-instance', (_event, argv) => {
   if (!testMode && argv.includes('--admin-login')) createAdmin().then(beginAuthorization).catch(reportLoginError);
   if (!testMode && argv.includes('--admin-groups')) createAdmin().catch(() => dialog.showErrorBox('分组设置打开失败', '请重启令牌工具后再试。'));
 });
-app.on('before-quit', () => {
+app.on('before-quit', event => {
+  if (!financeQuitReady && financeHttpController?.state().listening) {
+    event.preventDefault(); closing = true; financeQuitReady = true;
+    void financeHttpController.close().catch(() => {}).finally(() => app.quit());
+    return;
+  }
   clearTimeout(tableTimer);syncRecordTable();
   channelMonitor?.stop();channelHost?.closeAll();
   closing = true; if (copiedKey && clipboard.readText() === copiedKey) clipboard.clear();
@@ -365,8 +389,26 @@ function makeFixtureAlertStore() {
     clear() { current = null; return state(); },
     delivery: () => 'armed', mark: () => state(), dailyDelivery: () => null, markDaily: () => state() };
 }
+function makeFixtureFactorStore() {
+  const factors = Object.fromEntries(CHANNELS.map(channel => [channel.id, null]));
+  const state = () => ({ factors: CHANNELS.map(channel => ({ id: channel.id,
+    rate: factors[channel.id]?.rate ?? null, updatedAt: factors[channel.id]?.updatedAt ?? null })), storageError: false });
+  return { load: state, state, save(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        Object.keys(input).sort().join('|') !== 'id|rate' || !CHANNELS.some(channel => channel.id === input.id))
+      throw new ToolError('INPUT', '请选择已配置渠道并填写有效倍率。');
+    const rate = normalizeRate(input.rate);
+    factors[input.id] = { rate, updatedAt: new Date().toISOString() };
+    return state();
+  } };
+}
 app.whenReady().then(async () => {
   adminOperationLog = makeAdminOperationLog(app.getPath('userData'), {memory:testMode});
+  try {
+    channelFactorStore = testMode ? makeFixtureFactorStore() :
+      makeChannelFactorStore(path.join(app.getPath('userData'), 'channel-monitor'));
+    channelFactorStore.load();
+  } catch { channelFactorStore = null; } // Damaged factors cannot modify or block balance collection.
   try {
     const accessDir = testMode ? path.join(app.getPath('userData'), 'channel-access-fixture') :
       path.join(app.getPath('userData'), 'channel-monitor');
@@ -421,9 +463,22 @@ app.whenReady().then(async () => {
   try {
     groupSettingsService = new GroupSettingsService({ request: testMode ? fixture.request : request, getOwner: () => service.owner,
       onProgress: stage => adminOperationLog.step(stage),
+      otherBlocked: () => bulkGroupRatesFault || bulkGroupRates?.busy || bulkGroupRates?.storageFault ||
+        bulkGroupRates?.records.some(row => ['pending','unknown'].includes(row.state)),
       catalog: testMode ? { load: () => [], save() {} } : makeCatalogStore(path.join(app.getPath('userData'), 'group-settings')),
       store: testMode ? { load: () => [], save() {} } : makeDiskStore(path.join(app.getPath('userData'), 'group-settings'), safeStorage) });
   } catch { groupSettingsService = null; } // A corrupt independent ledger never falls back to empty records.
+  try {
+    bulkGroupRates = new BulkGroupRatesService({ request: testMode ? fixture.request : request,
+      store: testMode ? { load: () => [], save() {} } :
+        makeBulkRateStore(path.join(app.getPath('userData'), 'bulk-group-rates'), safeStorage),
+      getOwner: () => service.owner,
+      otherBlocked: () => !groupSettingsService || groupSettingsService.busy || groupSettingsService.storageFault ||
+        groupSettingsService.state().blocked > 0,
+      throttle: () => new Promise(resolve => setTimeout(resolve, 120)),
+      onProgress: value => { if (adminUI && !adminUI.isDestroyed())
+        adminUI.webContents.send('key-tool:bulk-group-rates-progress', value); } });
+  } catch { bulkGroupRates = null; bulkGroupRatesFault = true; } // Preserve damaged batch ledger and block all rate writes.
   try {
     userOwnership = new UserOwnership({ request: testMode ? fixture.request : request,
       store: testMode ? { load: () => [], save() {} } : makeOwnershipStore(path.join(app.getPath('userData'), 'user-ownership'), safeStorage),
@@ -443,6 +498,36 @@ app.whenReady().then(async () => {
       : async token => Number((await fetchPlatform(token, 'GET', '/auth/me'))?.id),
     flush: testMode ? async () => {} : flushPlatformSession,
     openLogin: testMode ? async () => {} : async () => { createLogin(true); await ensureSessionReady(); }, onChange: publishAuth });
+  rechargeQuery = new RechargeQuery({ request: (method, route) =>
+    (testMode ? fixture.request(method, route) : request(method, route, undefined, { rechargeQuery: true })),
+    getOwner: () => service.owner,
+    onProgress: progress => { if (adminUI && !adminUI.isDestroyed())
+      adminUI.webContents.send('key-tool:recharge-query-progress', progress); } });
+  userBalanceQuery = new UserBalanceQuery({ request: testMode ? fixture.request : request,
+    getOwner: () => auth.state().owner });
+  if (!testMode) {
+    try {
+      financeHttpConfigStore = makeFinanceHttpConfigStore(path.join(app.getPath('userData'), 'finance-http'), safeStorage);
+      financeHttpConfigStore.load();
+      financeHttpController = makeFinanceHttpController({ store: financeHttpConfigStore,
+        assertOwner: async ownerId => {
+          await assertFeishuAdmin();
+          if (auth.state().owner !== ownerId) throw new ToolError('AUTH', '财务接口绑定的管理员已变化，请重新核对。');
+        },
+        getChannelRows: () => {
+          if (!channelMonitor) throw new ToolError('STORAGE', '渠道读数不可用。');
+          return channelMonitor.state();
+        },
+        getFactorState: () => {
+          if (!channelFactorStore) throw new ToolError('STORAGE', '渠道倍率不可用。');
+          return channelFactorStore.state();
+        },
+        getCustomerSnapshot: () => userBalanceQuery.query({}) });
+    } catch { financeHttpController = null; }
+  }
+  if (userOwnership) groupUsage = new GroupUsage({ ownership: userOwnership,
+    request: (method, route) => testMode ? fixture.request(method, route) :
+      request(method, route, undefined, { groupUsage: true }) });
   try {
     accountSchedule = new AccountSchedule({ request: testMode ? fixture.request : request,
       store: testMode ? { load: () => [], save() {} } : makeAccountScheduleStore(path.join(app.getPath('userData'), 'account-schedule'), safeStorage),
@@ -525,6 +610,55 @@ app.whenReady().then(async () => {
   register('admin-channel-monitor-state', () => {
     if (!channelMonitor) throw new ToolError('STORAGE', '渠道监控名称配置无法安全读取，请保留原文件检查。');
     return channelMonitor.state();
+  }, true);
+  register('admin-channel-factor-state', () => {
+    if (!channelFactorStore) throw new ToolError('STORAGE', '渠道倍率配置无法安全读取，请保留原文件检查。');
+    try { return channelFactorStore.state(); }
+    catch { throw new ToolError('STORAGE', '渠道倍率配置无法安全读取，请保留原文件检查。'); }
+  }, true);
+  register('admin-channel-converted-state', () => {
+    if (!channelMonitor || !channelFactorStore) throw new ToolError('STORAGE', '渠道监控或倍率配置不可用。');
+    try { return calculateMonitoredSuppliers(channelMonitor.state(), channelFactorStore.state()); }
+    catch { throw new ToolError('SCHEMA', '渠道折算余额无法完整核对；不会返回部分总额。'); }
+  }, true);
+  const financeApi = () => {
+    if (!financeHttpController) throw new ToolError('STORAGE', '财务只读接口配置无法安全读取；接口已关闭，请保留原文件检查。');
+    return financeHttpController;
+  };
+  const financeApiAction = async action => {
+    try { return await action(); }
+    catch (error) {
+      if (error instanceof ToolError) throw error;
+      throw new ToolError(['AUTH', 'DENIED', 'BUSY', 'STORAGE', 'CONNECT'].includes(error?.code) ? error.code : 'OPERATION_ERROR',
+        ['AUTH', 'DENIED', 'BUSY', 'STORAGE', 'CONNECT'].includes(error?.code) ? error.message :
+          '财务接口操作未完成；请保留配置原件并检查本机状态。');
+    }
+  };
+  register('admin-finance-api-state', () => financeHttpController?.state() ||
+    { configured: false, enabled: false, listening: false, storageError: true, host: '127.0.0.1', port: null }, true);
+  register('admin-finance-api-enable', async () => {
+    await assertFeishuAdmin();
+    return financeApiAction(() => financeApi().enable(auth.state().owner));
+  }, true);
+  register('admin-finance-api-pause', async () => financeApiAction(() => financeApi().pause()), true);
+  register('admin-finance-api-rotate', async () => {
+    await assertFeishuAdmin();
+    return financeApiAction(() => financeApi().rotate(auth.state().owner));
+  }, true);
+  register('admin-finance-api-copy-token', async () => {
+    await assertFeishuAdmin();
+    const token = await financeApiAction(() => financeApi().secretForCopy(auth.state().owner));
+    copySecret(token);
+    return { copied: true, clearsAfterSeconds: 60 };
+  }, true);
+  register('admin-channel-factor-save', input => {
+    if (!channelFactorStore) throw new ToolError('STORAGE', '渠道倍率配置不可用，请保留原文件检查。');
+    let next;
+    try { next = channelFactorStore.save(input); }
+    catch (error) { throw new ToolError(error?.code === 'INPUT' ? 'INPUT' : 'STORAGE',
+      error?.code === 'INPUT' ? error.message : '渠道倍率未安全保存，请保留原文件检查。'); }
+    if (adminUI && !adminUI.isDestroyed()) adminUI.webContents.send('key-tool:channel-factor-state', next);
+    return next;
   }, true);
   const accessStore = () => {
     if (!channelAccess) throw new ToolError('STORAGE', '渠道授权不可用，请保留原文件检查。');
@@ -714,6 +848,10 @@ app.whenReady().then(async () => {
     await assertFeishuAdmin();
     return usageHistory().historyCatalog();
   }, true);
+  register('admin-daily-usage-account-options', async input => {
+    await assertFeishuAdmin();
+    return usageHistory().accountOptions(input);
+  }, true);
   register('admin-daily-usage-collect-today', async () => {
     await assertFeishuAdmin();
     return usageHistory().collectToday();
@@ -721,6 +859,14 @@ app.whenReady().then(async () => {
   register('admin-daily-usage-history-week', async input => {
     await assertFeishuAdmin();
     return usageHistory().historyWeek(input);
+  }, true);
+  register('admin-daily-usage-group-week', async input => {
+    await assertFeishuAdmin();
+    if (!groupUsage) throw new ToolError('STORAGE', '用户归属或分组用量暂不可读取，请保留原件。');
+    const selected = usageHistory().historyWeek(input);
+    const result = await groupUsage.query({ start: selected.week.start, end: selected.week.end, name: selected.name });
+    await assertFeishuAdmin();
+    return result;
   }, true);
   register('admin-daily-usage-history-export', async input => {
     await assertFeishuAdmin();
@@ -735,7 +881,17 @@ app.whenReady().then(async () => {
       throw new ToolError('INPUT', '请选择 .xlsx 文件名。');
     await assertFeishuAdmin();
     const fresh = usageHistory().historyExport(input);
-    const bytes = Buffer.from(await exportWorkbook(fresh));
+    let groupData;
+    if (fresh.count <= 31) {
+      if (!groupUsage) throw new ToolError('STORAGE', '分组用量暂不可读取，Excel 未保存。');
+      groupData = await groupUsage.query({ start: fresh.start, end: fresh.end,
+        ...(input.scope === 'person' ? { name: input.name } : {}) });
+      await assertFeishuAdmin();
+      const verified = usageHistory().historyExport(input);
+      if (JSON.stringify(verified) !== JSON.stringify(fresh))
+        throw new ToolError('POLICY', '导出期间归属或历史记录已变化，请重新导出。');
+    }
+    const bytes = Buffer.from(await exportWorkbook(fresh, groupData));
     const fs = require('node:fs/promises');
     const temporary = path.join(path.dirname(chosen.filePath), `.${path.basename(chosen.filePath)}.${require('node:crypto').randomUUID()}.tmp`);
     let handle;
@@ -750,7 +906,7 @@ app.whenReady().then(async () => {
       await fs.unlink(temporary).catch(() => {});
     }
     return { canceled: false, fileName: path.basename(chosen.filePath), rows: wideLayout(fresh).accountRows,
-      people: fresh.people, days: fresh.count };
+      people: fresh.people, days: fresh.count, groupIncluded: Boolean(groupData) };
   }, true);
   register('admin-daily-usage-backfill-status', async () => {
     await assertFeishuAdmin();
@@ -759,6 +915,16 @@ app.whenReady().then(async () => {
   register('admin-daily-usage-backfill-current-month', async () => {
     await assertFeishuAdmin();
     const result = await usagePublisher().backfillCurrentMonth();
+    if (result.phase === 'failed') throw new ToolError('OPERATION_ERROR', result.message);
+    return result;
+  }, true);
+  register('admin-daily-usage-account-backfill-status', async () => {
+    await assertFeishuAdmin();
+    return usageHistory().accountBackfillStatus();
+  }, true);
+  register('admin-daily-usage-account-backfill-current-month', async input => {
+    await assertFeishuAdmin();
+    const result = await usageHistory().backfillAccountCurrentMonth(input);
     if (result.phase === 'failed') throw new ToolError('OPERATION_ERROR', result.message);
     return result;
   }, true);
@@ -773,9 +939,69 @@ app.whenReady().then(async () => {
     try { return ownershipDraft.save(userOwnership.scope(), input); }
     catch { throw new ToolError('STORAGE', '归属草稿未安全暂存，请保留当前窗口及原文件。'); }
   }, true);
+  register('admin-recharge-query', async input => {
+    await assertFeishuAdmin();
+    if (!rechargeQuery) throw new ToolError('STORAGE', '充值查询尚未就绪。');
+    return rechargeQuery.query(input);
+  }, true);
+  register('admin-user-balance-query', async input => {
+    await assertFeishuAdmin();
+    return userBalanceQuery.query(input);
+  }, true);
   register('admin-group-settings-refresh', async () => { await assertFeishuAdmin(); return settings().refresh(); }, true);
   register('admin-group-settings-save', async input => { await assertFeishuAdmin(); return settings().saveNames(input); }, true);
   register('admin-group-settings-records', async () => { await assertFeishuAdmin(); return settings().history(); }, true);
+  const bulkRates = () => {
+    if (!bulkGroupRates || bulkGroupRatesFault) throw new ToolError('STORAGE', '批量倍率记录不可安全读取；已停止修改，请保留原件。');
+    return bulkGroupRates;
+  };
+  register('admin-bulk-group-rates-snapshot', async () => {
+    await assertFeishuAdmin(); return bulkRates().snapshot();
+  }, true);
+  register('admin-bulk-group-rates-import', async () => {
+    await assertFeishuAdmin();
+    const owner = auth.state().owner;
+    const chosen = await dialog.showOpenDialog(adminUI, {
+      title: '读取批量调价用户名单',
+      properties: ['openFile'],
+      filters: [{ name: '用户清单或可识别文档',
+        extensions: ['xlsx', 'csv', 'txt', 'docx', 'pdf', 'png', 'jpg', 'jpeg'] }]
+    });
+    if (chosen.canceled || chosen.filePaths?.length !== 1) return { canceled: true };
+    await assertFeishuAdmin();
+    if (auth.state().owner !== owner) throw new ToolError('AUTH', '管理员身份已变化，请重新读取当前用户目录。');
+    let data;
+    try {
+      const filePath = chosen.filePaths[0];
+      data = ['.docx', '.pdf', '.png', '.jpg', '.jpeg'].includes(path.extname(filePath).toLowerCase())
+        ? await extractDocumentEmails(filePath) : await readBulkRateSelectionFile(filePath);
+    }
+    catch (error) {
+      const message = error?.message;
+      const safe = typeof message === 'string' && message.length <= 160 &&
+        /^(?:文件|请选择|仅支持|Excel|CSV|账号|用户|邮箱|多列表格|文本文件|不支持|Word|PDF|PNG|JPG|图片|文档)/.test(message);
+      throw new ToolError('INPUT', safe ? message : '用户清单无法读取，请检查文件格式和权限。');
+    }
+    await assertFeishuAdmin();
+    if (auth.state().owner !== owner) throw new ToolError('AUTH', '管理员身份已变化，请重新读取当前用户目录。');
+    return data;
+  }, true);
+  register('admin-bulk-group-rates-preview', async input => {
+    await assertFeishuAdmin(); return bulkRates().preview(input);
+  }, true);
+  register('admin-bulk-group-rates-commit', async input => {
+    await assertFeishuAdmin(); return bulkRates().commit(input);
+  }, true);
+  register('admin-bulk-group-rates-history', async () => {
+    await assertFeishuAdmin(); return bulkRates().history();
+  }, true);
+  register('admin-bulk-group-rates-review', async input => {
+    await assertFeishuAdmin();
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        Object.keys(input).length !== 1 || typeof input.requestId !== 'string')
+      throw new ToolError('INPUT', '核对参数无效。');
+    return bulkRates().review(input.requestId);
+  }, true);
   register('admin-group-settings-review', async input => {
     await assertFeishuAdmin();
     if (!input || typeof input.requestId !== 'string' || !['readback','manual'].includes(input.mode)) throw new ToolError('INPUT', '核对参数无效。');
@@ -892,12 +1118,18 @@ app.whenReady().then(async () => {
     else tablePreparationError=true;
   }
   if (!testMode) void feishuReconnect.start().then(publishFeishuState);
+  if (!testMode && financeHttpController && financeHttpConfigStore?.state().enabled) {
+    void financeHttpController.resume(financeHttpConfigStore.state().ownerId).catch(() => {});
+  }
   if (!testMode && adminLoginMode) {
     // The initial customer refresh may still be verifying the previous session.
     if (service.refreshing) await service.refreshing.catch(() => {});
     await beginAuthorization().catch(reportLoginError);
   }
-  if (testMode) await require('./test-fixture').verifyUI({ app, ui, fixture, registrationService, tokenService:service, userOwnership, memberNames, accountSchedule, channelMonitor, dailyUsagePublisher,
+  if (financeFixtureMode) {
+    await require('./test-fixture-finance').verifyFinanceUI({ app, channelMonitor, openAdminWindow: createAdmin });
+    app.exit(0);
+  } else if (testMode) await require('./test-fixture').verifyUI({ app, ui, fixture, registrationService, tokenService:service, userOwnership, memberNames, accountSchedule, channelMonitor, dailyUsagePublisher,
     openAdminWindow: createAdmin, openPlatformWindow: createLogin, getPlatformWindow: () => login, apiSession, auth, request });
 }).catch(error => {
   if (testMode) console.error('fixture startup failed:', error?.stack || error?.message || 'unknown');

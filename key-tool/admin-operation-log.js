@@ -6,6 +6,9 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const ACTIONS = Object.freeze({
   'admin-refresh':'读取令牌分组', 'admin-save-groups':'发布令牌分组',
   'admin-login':'打开平台登录', 'admin-complete-login':'保存平台授权', 'admin-recover-authorization':'恢复平台授权',
+  'admin-restricted-read-key-status':'读取受限只读密钥状态',
+  'admin-restricted-read-key-save':'验证并保存受限只读密钥',
+  'admin-restricted-read-key-clear':'停用本机受限只读密钥',
   'admin-feishu-connect':'启用飞书连接', 'admin-feishu-disconnect':'暂停飞书连接',
   'admin-feishu-save-credentials':'保存飞书凭据', 'admin-feishu-start-owner-binding':'发起管理员绑定',
   'admin-feishu-confirm-owner':'确认管理员绑定', 'admin-feishu-start-group-binding':'发起目标群绑定',
@@ -15,6 +18,9 @@ const ACTIONS = Object.freeze({
   'admin-registration-records':'读取注册记录', 'admin-registration-review':'核对注册记录',
   'admin-records':'读取令牌记录', 'admin-record':'读取令牌详情', 'admin-secret':'显示令牌密钥', 'admin-copy-secret':'复制令牌密钥',
   'admin-channel-monitor-rename':'保存渠道名称', 'admin-channel-monitor-open':'打开渠道登录窗口', 'admin-channel-monitor-check':'读取渠道金额',
+  'admin-channel-factor-save':'保存渠道人民币折算倍率', 'admin-channel-converted-state':'核对渠道折算总余额',
+  'admin-finance-api-enable':'启用本机财务只读接口', 'admin-finance-api-pause':'暂停本机财务只读接口',
+  'admin-finance-api-rotate':'轮换本机财务接口密钥', 'admin-finance-api-copy-token':'复制本机财务接口密钥',
   'admin-channel-login-save':'保存渠道自动登录', 'admin-channel-login-pause':'暂停渠道自动登录', 'admin-channel-login-clear':'清除渠道自动登录',
   'admin-channel-alert-save':'保存低余额邮件提醒', 'admin-channel-alert-pause':'暂停低余额邮件提醒', 'admin-channel-alert-clear':'清除低余额邮件提醒',
   'admin-channel-alert-test':'发送渠道余额测试邮件',
@@ -27,14 +33,23 @@ const ACTIONS = Object.freeze({
   'admin-daily-usage-pause':'暂停每日用量群表', 'admin-daily-usage-now':'立即更新每日用量群表',
   'admin-daily-usage-review-absent':'人工核对首次群卡片未见并暂停',
   'admin-daily-usage-backfill-current-month':'补采本月已结束日期用量',
+  'admin-daily-usage-account-backfill-current-month':'定向补采单账号历史用量',
   'admin-daily-usage-history-export':'导出历史用量 Excel',
   'admin-daily-usage-collect-today':'采样今日归属用量（不发群）',
   'admin-account-schedule-snapshot':'读取平台账号与计划', 'admin-account-schedule-create':'保存账号定时计划',
-  'admin-account-schedule-cancel':'取消账号定时步骤', 'admin-account-schedule-reconcile':'只读核对账号开关'
+  'admin-account-schedule-cancel':'取消账号定时步骤', 'admin-account-schedule-reconcile':'只读核对账号开关',
+  'admin-recharge-query':'读取充值与平台审计候选',
+  'admin-user-balance-query':'读取用户余额与普通用户正余额合计',
+  'admin-bulk-group-rates-snapshot':'只读查询分组与用户倍率',
+  'admin-bulk-group-rates-import':'读取批量调价用户名单',
+  'admin-bulk-group-rates-preview':'预览批量倍率调整',
+  'admin-bulk-group-rates-commit':'提交批量倍率调整',
+  'admin-bulk-group-rates-history':'读取批量倍率操作记录',
+  'admin-bulk-group-rates-review':'只读核对批量倍率结果'
 });
 const STAGES = Object.freeze({ operation:'执行操作', identity:'核验管理员授权', groups:'读取平台分组', validation:'校验分组名称',
   'recheck-identity':'再次核验账户', storage:'保存本机配置', complete:'操作完成' });
-const CODES = new Set(['INPUT','AUTH','DENIED','POLICY','BUSY','STORAGE','DUPLICATE','UNKNOWN','HTTP','API','NETWORK','SCHEMA','CONFLICT','LIMIT','ROUTE','STOP','CONFIG','CONNECT','TIMEOUT','OPERATION_ERROR']);
+const CODES = new Set(['INPUT','AUTH','DENIED','POLICY','BUSY','STORAGE','DUPLICATE','UNKNOWN','HTTP','API','NETWORK','SCHEMA','CONFLICT','LIMIT','ROUTE','STOP','CONFIG','CONNECT','TIMEOUT','OPERATION_ERROR','KEY_AUTH','KEY_DENIED','KEY_REQUIRED','RATE_LIMIT']);
 const MAX_BYTES=4*1024*1024, MAX_ROWS=500;
 function safe(row) {
   if (!row || !/^[a-f0-9-]{36}$/.test(row.id) || !Object.hasOwn(ACTIONS,row.action) || !Object.hasOwn(STAGES,row.stage) ||
